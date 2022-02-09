@@ -3,9 +3,9 @@ using JuMP, CPLEX, LinearAlgebra
 #include("relax.jl")
 
 #testing
-A = [3 2 5; 2 1 1; 1 1 3; 5 2 4; -1 -1 -1]
+A = [3 2 5; -2 1 1; 1 -1 3; 5 2 -4; -1 0 0; 0 -1 0; 0 0 -1]
 
-b = [55; 26; 30; 57 ; 0]
+b = [55; 26; 30; 57; 0; 0; 0]
 
 c = [20, 10, 15]
 
@@ -33,8 +33,24 @@ function relax!(A::AbstractMatrix{<:Rational{Int64}},b::AbstractVector{<:Abstrac
     end
 end
 
-function transformationMatrixBounds(A::AbstractMatrix)
+#this function is wrong
+function transformationMatrixBoundsWRONG(A::AbstractMatrix)
     #need to check that there is no empty columns in A
+    rowsum = sum(A,dims=2)
+    Areciprical = 1 ./ A
+    minoffdiagcoef= -ones(size(A,2))
+    maxoffdiagcoef= -ones(size(A,2))
+
+    for (index, col) in enumerate(eachcol(Areciprical.*rowsum))
+        minoffdiagcoef[index] += minimum(col[isfinite.(col)])
+        maxoffdiagcoef[index] += maximum(col[isfinite.(col)])
+    end
+    return minoffdiagcoef,maxoffdiagcoef
+end
+
+#this function is wrong
+function transformationMatrixBoundsWithCWRONG(A::AbstractMatrix, c::AbstractVector)
+    A= [A; c']
     rowsum = sum(A,dims=2)
     Areciprical = 1 ./ A
     minoffdiagcoef= -ones(size(A,2))
@@ -51,20 +67,20 @@ function transformationMatrixBoundsWithC(A::AbstractMatrix, c::AbstractVector)
     A= [A; c']
     rowsum = sum(A,dims=2)
     Areciprical = 1 ./ A
-    minoffdiagcoef= -ones(size(A,2))
-    maxoffdiagcoef= -ones(size(A,2))
+    umin= zeros(size(A,2))
+    umax= zeros(size(A,2))
 
     for (index, col) in enumerate(eachcol(Areciprical.*rowsum))
-        minoffdiagcoef[index] += minimum(col[isfinite.(col)])
-        maxoffdiagcoef[index] += maximum(col[isfinite.(col)])
+        umin[index] = minimum(col[isfinite.(col)])
+        umax[index] = maximum(col[isfinite.(col)])
     end
-    return minoffdiagcoef,maxoffdiagcoef
+    return umin,umax
 end
 
 
 
 
-function orientationMIP(A,b,c)
+function orientationMIPOLD(A,b,c)
     n,m = size(A)
     orientationModel = Model(CPLEX.Optimizer)
 
@@ -80,7 +96,7 @@ function orientationMIP(A,b,c)
 
     @constraint(orientationModel, mainConstraint2, A * (x-u.+(1/2)) .<= b)
 
-    #TT = stdout # save original STDOUT stream
+    #TT = stdout # save original STDOUT stream0
     #redirect_stdout()
 
     optimize!(orientationModel)
@@ -89,6 +105,47 @@ function orientationMIP(A,b,c)
 
     return value.(x), (2*round.(Int,value.(u)) .-1)
 end
+
+
+function orientationMIP(A,b,c)
+    n,m = size(A)
+    orientationModel = Model(CPLEX.Optimizer)
+
+    #orientationModel = Model()
+
+    @variable(orientationModel, x[1:m] )
+
+    @variable(orientationModel, u[1:m], Bin)
+
+    fix(u[1], 1; force = true)
+
+    v = u.-1/2
+
+    @objective(orientationModel, Max, c' * x)
+
+    @constraint(orientationModel, mainConstraint1,
+        A * (x+v/2) .<= b-sum(abs.(A), dims=2)/4
+    )
+
+    @constraint(orientationModel, mainConstraint2,
+        A * (x-v/2) .<= b-sum(abs.(A), dims=2)/4
+    )
+
+    #TT = stdout # save original STDOUT stream0
+    #redirect_stdout()
+
+    optimize!(orientationModel)
+
+    #redirect_stdout(TT)
+
+    return value.(x), (2*round.(Int,value.(u)) .-1)
+end
+
+
+
+
+
+
 
 
 #u=[1,1,1]
@@ -115,7 +172,7 @@ function myMethodUV(A,b,c,mini,orientation)
 
     #transmat = reduce(hcat,fill(u,m))+diagm(v)
 
-    transmat = reduce(hcat,fill(transmatofdiag,m)) -
+    transmat = reduce(vcat,fill(transmatofdiag,m)') -
     diagm(transmatofdiag) + diagm(transmatdiag)
 
     #@objective(myMethodModel, Max,
@@ -174,10 +231,12 @@ end
 
 relax!(A,b,tol)
 
+#this is wrong need to do orientation first as that can massively impact bounds on u
 mini, maxi = transformationMatrixBounds([A; c']) #include c in orientation constriants
 
 flotSol, orientation = orientationMIP(A,b,c)
 
 ~,~,uactual,vactual =myMethodUV(A,b,c,mini,orientation)
 
-actualT = reduce(hcat,fill(uactual,m)) -diagm(uactual) + diagm(vactual)
+n,m = size(A)
+actualT = reduce(vcat,fill(uactual,m)') -diagm(uactual) + diagm(vactual)
