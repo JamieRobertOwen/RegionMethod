@@ -131,12 +131,12 @@ function orientationMIP(A,b,c)
         A * (x-v/2) .<= b-sum(abs.(A), dims=2)/4
     )
 
-    TT = stdout # save original STDOUT stream0
-    redirect_stdout()
+    #TT = stdout # save original STDOUT stream0
+    #redirect_stdout()
 
     optimize!(orientationModel)
 
-    redirect_stdout(TT)
+    #redirect_stdout(TT)
 
     return value.(x), (2*round.(Int,value.(u)) .-1)
 end
@@ -253,9 +253,67 @@ function finding_bounds_xor(n,tol)
     return uMin, uMax
 end # functions
 
+function housekeeping(A,b,c,tol)
+    A = rationalize.(float.(A))
+    b = float.(b)
+    relax!(A,b,tol)
+    flotSol, orientation = orientationMIP(A,b,c)
+    A = A.*orientation'
+    c = c.*orientation
+    dMin,dMax = transformationMatrixBoundsWithC(A,c)
+    return A, b, c, dMin, dMax
+end
+
+
+function qSolve(d,A,b,c)
+    m,n = size(A)
+    myMethodModel = Model(CPLEX.Optimizer)
+
+    @variable(myMethodModel, x[1:n])
+
+    @variable(myMethodModel, q[1:n] >=0)
+
+    transmat = reduce(vcat,fill(d.*q,n)')+diagm(q)
+
+    r = d .* (sign.(d).==1)
+    s = -d .* (sign.(d).==-1)
+
+    rSum = sum(r)
+    sSum = sum(s)
+    dSum = sum(d)
+
+    @objective(myMethodModel, Max,
+        #c' * (x + 1/2 .* transmat*sign.(c))
+        c'*x
+    )
+
+    @constraint(myMethodModel, MainCon[i=1:m],
+        A[i,:]' * (x + 1/2 .* transmat*sign.(A[i,:])) <= b[i]
+    )
+
+    @constraint(myMethodModel, rCon[i=1:n],
+        1 + rSum -r[i]<=q[i]*(1+dSum)
+    )
+
+    @constraint(myMethodModel, sCon[i=1:n],
+        sSum -s[i]<=q[i]*(1+dSum)
+    )
+
+
+    optimize!(myMethodModel)
+
+
+    return objective_value(myMethodModel), value.(x), value.(q)
+end
+
+
+for i in 1:m
+    j[i] = range(-1 / dMax, -1/dMin, length = 5)
 
 
 
+
+function oldstuff
 
 relax!(A,b,tol)
 
@@ -268,3 +326,4 @@ flotSol, orientation = orientationMIP(A,b,c)
 
 n,m = size(A)
 actualT = reduce(vcat,fill(uactual,m)') -diagm(uactual) + diagm(vactual)
+end
