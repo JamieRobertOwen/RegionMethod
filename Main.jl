@@ -131,12 +131,12 @@ function orientationMIP(A,b,c)
         A * (x-v/2) .<= b-sum(abs.(A), dims=2)/4
     )
 
-    #TT = stdout # save original STDOUT stream0
-    #redirect_stdout()
+    TT = stdout # save original STDOUT stream0
+    redirect_stdout()
 
     optimize!(orientationModel)
 
-    #redirect_stdout(TT)
+    redirect_stdout(TT)
 
     return value.(x), (2*round.(Int,value.(u)) .-1)
 end
@@ -225,6 +225,34 @@ function myMethodUV(A,b,c,mini,orientation)
     #    return NaN, ones(m)*NaN, ones(m)*NaN
     #end
 end
+
+
+function finding_bounds(A,b,c,tol)
+    A = rationalize.(float.(A))
+    b = float.(b)
+    relax!(A,b,tol)
+    flotSol, orientation = orientationMIP(A,b,c)
+    A = A.*orientation'
+    c = c.*orientation
+    uMin,uMax = transformationMatrixBoundsWithC(A,c)
+    return uMin, uMax
+end # functions
+
+function finding_bounds_xor(n,tol)
+
+    A = [ones(n)' ; -I]
+    b = [1 ; zeros(n)]
+    c = ones(n)
+    A = rationalize.(float.(A))
+    b = float.(b)
+    relax!(A,b,tol)
+    flotSol, orientation = orientationMIP(A,b,c)
+    A = A.*orientation'
+    c = c.*orientation
+    uMin,uMax = transformationMatrixBoundsWithC(A,c)
+    return uMin, uMax
+end # functions
+
 
 
 
