@@ -1,4 +1,4 @@
-using JuMP, CPLEX, LinearAlgebra
+using JuMP, CPLEX, LinearAlgebra, NLopt
 
 #include("relax.jl")
 
@@ -134,7 +134,7 @@ function orientationMIP(A,b,c)
     #TT = stdout # save original STDOUT stream0
     #redirect_stdout()
 
-    optimize!(orientationModel)
+    JuMP.optimize!(orientationModel)
 
     #redirect_stdout(TT)
 
@@ -250,7 +250,7 @@ function finding_bounds_xor(n,tol)
     A = A.*orientation'
     c = c.*orientation
     uMin,uMax = transformationMatrixBoundsWithC(A,c)
-    return uMin, uMax
+    return A, b, c, uMin, uMax
 end # functions
 
 function housekeeping(A,b,c,tol)
@@ -303,12 +303,90 @@ function qSolve(d,A,b,c)
     optimize!(myMethodModel)
 
 
-    return objective_value(myMethodModel), value.(x), value.(q)
+    return objective_value(myMethodModel), value.(x), value.(q-
+end
+
+function NLsolveVersion(A,b,c,dMin)
+    m,n = size(A)
+    myMethodModel = Model(NLopt.Optimizer)
+
+    set_optimizer_attribute(myMethodModel, "algorithm", :LD_MMA)
+
+    @variable(myMethodModel, x[1:n])
+
+    @variable(myMethodModel, q[1:n] >=0)
+
+    @variable(myMethodModel, d[1:n] >=0)
+
+    #@variable(myMethodModel, u[1:n])
+
+    transmat = reduce(vcat,fill(d .* q,n)')+diagm(q)
+
+    #r = d .* (sign.(d).==1)
+    #s = -d .* (sign.(d).==-1)
+
+    #rSum = sum(r)
+    #sSum = sum(s)
+    #dSum = sum(d)
+
+    @objective(myMethodModel, Max,
+        #c' * (x + 1/2 .* transmat*sign.(c))
+        c'*x
+    )
+
+    @constraint(myMethodModel, MainCon[i=1:m],
+        A[i,:]' * (x + 1/2 .* transmat*sign.(A[i,:])) <= b[i]
+    )
+
+    @constraint(myMethodModel, OrderCon[i=1:n],
+        -d[i]<=(q[i]-1)*(1+sum(d))
+    )
+
+    @constraint(myMethodModel, dCon1,
+        -1 .<= d .* dMin
+    )
+
+    #@constraint(myMethodModel, dDefineCon,
+    #    d .* q .>= u
+    #)
+
+    JuMP.optimize!(myMethodModel)
+
+
+    return objective_value(myMethodModel), value.(x), value.(q), value.(d)
+end
+
+function IntSolve(x,q,d,c)
+    n=length(x)
+    IntModel = Model(CPLEX.Optimizer)
+
+    @variable(IntModel, gamma[1:n], Int)
+
+    #@variable(IntModel, 0 <= s[1:n] <= 1)
+
+    @objective(IntModel, Max, c' * gamma)
+
+    transmat = reduce(vcat,fill(d .* q,n)')+diagm(q)
+
+    #@constraint(IntModel, mainConstraint,
+    #    gamma - x .<= transmat * (fill(1/2, n) - s)
+    #)
+
+    @constraint(IntModel, mainConstraint1,
+        transmat^-1 *(gamma - x) .<= fill(1/2, n)
+    )
+
+    @constraint(IntModel, mainConstraint2,
+        transmat^-1 *(gamma - x) .>= -fill(1/2, n)
+    )
+
+    JuMP.optimize!(IntModel)
+
+
+    return objective_value(IntModel), value.(gamma)
 end
 
 
-for i in 1:m
-    j[i] = range(-1 / dMax, -1/dMin, length = 5)
 
 
 

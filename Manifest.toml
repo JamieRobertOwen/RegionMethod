@@ -205,6 +205,12 @@ git-tree-sha1 = "afa62f733d78f63c2292730994dcb076835cf1d2"
 uuid = "b8f27783-ece8-5eb3-8dc8-9495eed66fee"
 version = "0.10.5"
 
+[[MathProgBase]]
+deps = ["LinearAlgebra", "SparseArrays"]
+git-tree-sha1 = "9abbe463a1e9fc507f12a69e7f29346c2cdc472c"
+uuid = "fdba3010-5040-5b88-9595-932c9decdf73"
+version = "0.7.8"
+
 [[MbedTLS_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "c8ffd9c3-330d-5841-b78e-0817d7145fa1"
@@ -220,6 +226,18 @@ deps = ["LinearAlgebra", "SparseArrays", "Test"]
 git-tree-sha1 = "7bb6853d9afec54019c1397c6eb610b9b9a19525"
 uuid = "d8a4904e-b15c-11e9-3269-09a3773c0cb0"
 version = "0.3.1"
+
+[[NLopt]]
+deps = ["MathOptInterface", "MathProgBase", "NLopt_jll"]
+git-tree-sha1 = "f115030b9325ca09ef1619ba0617b2a64101ce84"
+uuid = "76087f3c-5699-56af-9a33-bf431cd00edd"
+version = "0.6.4"
+
+[[NLopt_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
+git-tree-sha1 = "9b1f15a08f9d00cdb2761dcfa6f453f5d0d6f973"
+uuid = "079eb43e-fd8e-5478-9966-2cf3e3edb778"
+version = "2.7.1+0"
 
 [[NaNMath]]
 git-tree-sha1 = "bfe47e760d60b82b66b61d2d44128b62e3a369fb"
