@@ -249,8 +249,8 @@ function finding_bounds_xor(n,tol)
     flotSol, orientation = orientationMIP(A,b,c)
     A = A.*orientation'
     c = c.*orientation
-    uMin,uMax = transformationMatrixBoundsWithC(A,c)
-    return A, b, c, uMin, uMax
+    dMin,dMax = transformationMatrixBoundsWithC(A,c)
+    return A, b, c, dMin, dMax
 end # functions
 
 function housekeeping(A,b,c,tol)
@@ -300,10 +300,10 @@ function qSolve(d,A,b,c)
     )
 
 
-    optimize!(myMethodModel)
+    JuMP.optimize!(myMethodModel)
 
 
-    return objective_value(myMethodModel), value.(x), value.(q-
+    return objective_value(myMethodModel), value.(x), value.(q)
 end
 
 function NLsolveVersion(A,b,c,dMin)
@@ -321,7 +321,6 @@ function NLsolveVersion(A,b,c,dMin)
     #@variable(myMethodModel, u[1:n])
 
     transmat = reduce(vcat,fill(d .* q,n)')+diagm(q)
-
     #r = d .* (sign.(d).==1)
     #s = -d .* (sign.(d).==-1)
 
@@ -330,8 +329,8 @@ function NLsolveVersion(A,b,c,dMin)
     #dSum = sum(d)
 
     @objective(myMethodModel, Max,
-        #c' * (x + 1/2 .* transmat*sign.(c))
-        c'*x
+        c' * (x - 1/2 .* transmat*sign.(c))
+        #c'*x
     )
 
     @constraint(myMethodModel, MainCon[i=1:m],
@@ -356,6 +355,160 @@ function NLsolveVersion(A,b,c,dMin)
     return objective_value(myMethodModel), value.(x), value.(q), value.(d)
 end
 
+
+function NLsolveVersion2(A,b,c,dMin,dMax)
+    m,n = size(A)
+    myMethodModel = Model(NLopt.Optimizer)
+
+    set_optimizer_attribute(myMethodModel, "algorithm", :LD_MMA)
+
+    @variable(myMethodModel, x[1:n])
+
+    @variable(myMethodModel, q[1:n] >=0)
+
+    @variable(myMethodModel, d[1:n])
+
+    @variable(myMethodModel, r[1:n] >=0)
+
+    @variable(myMethodModel, s[1:n] >=0)
+
+    #@variable(myMethodModel, u[1:n])
+
+    transmat = reduce(vcat,fill(d .* q,n)')+diagm(q)
+
+    #r = d .* (sign.(d).==1)
+    #s = -d .* (sign.(d).==-1)
+
+    #rSum = sum(r)
+    #sSum = sum(s)
+    #dSum = sum(d)
+
+
+    @objective(myMethodModel, Max,
+        c' * (x - 1/2 .* transmat*sign.(c))
+        #c'*x
+    )
+
+    @constraint(myMethodModel, MainCon[i=1:m],
+        A[i,:]' * (x + 1/2 .* transmat*sign.(A[i,:])) <= b[i]
+    )
+
+    @constraint(myMethodModel, OrderCon1[i=1:n],
+        1+sum(r)-r[i] <= q[i]*(1+sum(d))
+    )
+
+    @constraint(myMethodModel, OrderCon2[i=1:n],
+        sum(s)-s[i] <= q[i]*(1+sum(d))
+    )
+
+    @constraint(myMethodModel, dConMin,
+        -1 .<= d .* dMin
+    )
+
+    @constraint(myMethodModel, dConMax,
+        -1 .<= d .* dMax
+    )
+
+    @constraint(myMethodModel, determminantCon,
+        sum(d)>=-1
+    )
+
+    @constraint(myMethodModel, rCon,
+        r .>= d
+    )
+
+    @constraint(myMethodModel, sCon,
+        s .>= -d
+    )
+    #@constraint(myMethodModel, dDefineCon,
+    #    d .* q .>= u
+    #)
+
+    JuMP.optimize!(myMethodModel)
+
+
+    return objective_value(myMethodModel), value.(x), value.(q), value.(d)
+end
+
+
+function NLsolveVersion3(A,b,c,dMin,dMax)
+    m,n = size(A)
+    myMethodModel = Model(NLopt.Optimizer)
+
+    set_optimizer_attribute(myMethodModel, "algorithm", :LD_MMA)
+
+    @variable(myMethodModel, x[1:n])
+
+    @variable(myMethodModel, q[1:n] >=0)
+
+    #@variable(myMethodModel, d[1:n])
+    @variable(myMethodModel, u[1:n])
+
+
+    @variable(myMethodModel, r[1:n] >=0)
+
+    @variable(myMethodModel, s[1:n] >=0)
+
+    #@variable(myMethodModel, u[1:n])
+    #d = u./q
+
+    transmat = reduce(vcat,fill(u,n)')+diagm(q)
+
+    #r = d .* (sign.(d).==1)
+    #s = -d .* (sign.(d).==-1)
+
+    #rSum = sum(r)
+    #sSum = sum(s)
+    #dSum = sum(d)
+
+
+    @objective(myMethodModel, Max,
+        c' * (x - 1/2 .* transmat*sign.(c))
+        #c'*x
+    )
+
+    @constraint(myMethodModel, MainCon[i=1:m],
+        A[i,:]' * (x + 1/2 .* transmat*sign.(A[i,:])) <= b[i]
+    )
+
+    @NLconstraint(myMethodModel, OrderCon1[i=1:n],
+        1+sum(r[j] for j in 1:n)-r[i] <= q[i]*(1+sum(u[j] / q[j] for j in 1:n))
+    )
+
+    @NLconstraint(myMethodModel, OrderCon2[i=1:n],
+        sum(s[j] for j in 1:n)-s[i] <= q[i]*(1+sum(u[j] / q[j] for j in 1:n))
+    )
+
+    @constraint(myMethodModel, dConMin,
+        0 .<=q+ u.* dMin
+    )
+
+    @constraint(myMethodModel, dConMax,
+        0 .<=q+ u.* dMax
+    )
+
+    @NLconstraint(myMethodModel, determminantCon,
+        sum(u[j] / q[j] for j in 1:n)>=-1
+    )
+
+    @constraint(myMethodModel, rCon,
+        r .* q .>= u
+    )
+
+    @constraint(myMethodModel, sCon,
+        s .* q .>= -u
+    )
+    #@constraint(myMethodModel, dDefineCon,
+    #    d .* q .>= u
+    #)
+
+    JuMP.optimize!(myMethodModel)
+
+
+    return objective_value(myMethodModel), value.(x), value.(q), value.(d)
+end
+
+
 function IntSolve(x,q,d,c)
     n=length(x)
     IntModel = Model(CPLEX.Optimizer)
@@ -368,17 +521,35 @@ function IntSolve(x,q,d,c)
 
     transmat = reduce(vcat,fill(d .* q,n)')+diagm(q)
 
+    v = d.*q
+    u = ones(n)
+    Ainv = diagm(1 ./q)
+
+    mult = 1 + v'*Ainv*u
+    lhs = (mult * Ainv-Ainv*u*v'*Ainv)
+    #lhs = Ainv-(Ainv*u*v'*Ainv)/(1 + v'*Ainv*u)
+
     #@constraint(IntModel, mainConstraint,
     #    gamma - x .<= transmat * (fill(1/2, n) - s)
     #)
 
     @constraint(IntModel, mainConstraint1,
-        transmat^-1 *(gamma - x) .<= fill(1/2, n)
+        lhs *(gamma - x) .<= fill(mult/2, n)
+        #lhs *(gamma - x) .<= fill(1/2, n)
     )
 
     @constraint(IntModel, mainConstraint2,
-        transmat^-1 *(gamma - x) .>= -fill(1/2, n)
+        lhs *(gamma - x) .>= -fill(mult/2, n)
+        #lhs *(gamma - x) .>= -fill(1/2, n)
     )
+
+    #@constraint(IntModel, mainConstraint1,
+    #    transmat^-1 *(gamma - x) .<= fill(1/2, n)
+    #)
+
+    #@constraint(IntModel, mainConstraint2,
+    #    transmat^-1 *(gamma - x) .>= -fill(1/2, n)
+    #)
 
     JuMP.optimize!(IntModel)
 
@@ -387,7 +558,14 @@ function IntSolve(x,q,d,c)
 end
 
 
-
+function testing(n,tol)
+    A, b, c, dMin, dMax = finding_bounds_xor(n,tol)
+    #obj, x, q, d = NLsolveVersion(A,b,c,dMin)
+    obj, x, q, d = NLsolveVersion2(A,b,c,dMin,dMax)
+    #obj, x, q, d = NLsolveVersion3(A,b,c,dMin,dMax)
+    trueobj, truex = IntSolve(x,q,d,c)
+    return A, b, c, q, d, trueobj, truex
+end
 
 
 
