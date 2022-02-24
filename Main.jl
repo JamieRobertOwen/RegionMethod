@@ -36,36 +36,6 @@ function relax(A::AbstractMatrix{<:Rational{Int64}},b::AbstractVector{<:Rational
     return A,b
 end
 
-#this function is wrong
-function transformationMatrixBoundsWRONG(A::AbstractMatrix)
-    #need to check that there is no empty columns in A
-    rowsum = sum(A,dims=2)
-    Areciprical = 1 ./ A
-    minoffdiagcoef= -ones(size(A,2))
-    maxoffdiagcoef= -ones(size(A,2))
-
-    for (index, col) in enumerate(eachcol(Areciprical.*rowsum))
-        minoffdiagcoef[index] += minimum(col[isfinite.(col)])
-        maxoffdiagcoef[index] += maximum(col[isfinite.(col)])
-    end
-    return minoffdiagcoef,maxoffdiagcoef
-end
-
-#this function is wrong
-function transformationMatrixBoundsWithCWRONG(A::AbstractMatrix, c::AbstractVector)
-    A= [A; c']
-    rowsum = sum(A,dims=2)
-    Areciprical = 1 ./ A
-    minoffdiagcoef= -ones(size(A,2))
-    maxoffdiagcoef= -ones(size(A,2))
-
-    for (index, col) in enumerate(eachcol(Areciprical.*rowsum))
-        minoffdiagcoef[index] += minimum(col[isfinite.(col)])
-        maxoffdiagcoef[index] += maximum(col[isfinite.(col)])
-    end
-    return minoffdiagcoef,maxoffdiagcoef
-end
-
 function transformationMatrixBoundsWithC(A::AbstractMatrix, c::AbstractVector)
     A= [A; c']
     rowsum = sum(A,dims=2)
@@ -73,44 +43,24 @@ function transformationMatrixBoundsWithC(A::AbstractMatrix, c::AbstractVector)
     umin= zeros(size(A,2))
     umax= zeros(size(A,2))
 
-    for (index, col) in enumerate(eachcol(Areciprical.*rowsum))
-        umin[index] = minimum(col[isfinite.(col)])
-        umax[index] = maximum(col[isfinite.(col)])
+    #for (index, col) in enumerate(eachcol(Areciprical.*rowsum))
+    #    umin[index] = minimum(col[isfinite.(col)])
+    #    umax[index] = maximum(col[isfinite.(col)])
+    #end
+
+    #for (index, col) in enumerate(eachcol(1 ./ A))
+    #    umin[index] = minimum(col[isfinite.(col)] .* rowsum[isfinite.(col)])
+    #    umax[index] = maximum(col[isfinite.(col)] .* rowsum[isfinite.(col)])
+    #end
+
+    for (index, col) in enumerate(eachcol(A))
+        umin[index] = minimum(rowsum[col.!=0] ./ col[col.!=0])
+        umax[index] = maximum(rowsum[col.!=0] ./ col[col.!=0])
     end
     return umin,umax
 end
 
-
-
-
-function orientationMIPOLD(A,b,c)
-    n,m = size(A)
-    orientationModel = Model(CPLEX.Optimizer)
-
-    #orientationModel = Model()
-
-    @variable(orientationModel, x[1:m] )
-
-    @variable(orientationModel, u[1:m], Bin)
-
-    @objective(orientationModel, Max, c' * x)
-
-    @constraint(orientationModel, mainConstraint1, A * (x+u.-(1/2)) .<= b)
-
-    @constraint(orientationModel, mainConstraint2, A * (x-u.+(1/2)) .<= b)
-
-    #TT = stdout # save original STDOUT stream0
-    #redirect_stdout()
-
-    optimize!(orientationModel)
-
-    #redirect_stdout(TT)
-
-    return value.(x), (2*round.(Int,value.(u)) .-1)
-end
-
-
-function orientationMIP(A,b,c)
+function findOrientation(A,b,c)
     n,m = size(A)
     orientationModel = Model(CPLEX.Optimizer)
     set_silent(orientationModel)
@@ -145,96 +95,46 @@ function orientationMIP(A,b,c)
 end
 
 
-
-
-
-
-
-
-#u=[1,1,1]
-function myMethodUV(A,b,c,mini,orientation)
+function findOrientationMIP(A,G,b,c,h)
     n,m = size(A)
+    n2,m2 = size(G)
+    orientationModel = Model(CPLEX.Optimizer)
+    set_silent(orientationModel)
 
-    #re-orient the problem
-    A = A.*orientation'
-    c = c.*orientation
-    #remeber to reorder for orientation
 
-    #signCombs = unique(sign.(A), dims =2)
-    #NosignCombs = size(signCombs,1)
-    myMethodModel = Model(CPLEX.Optimizer)
+    @variable(orientationModel, x[1:m])
 
-    @variable(myMethodModel, x[1:m])
+    @variable(orientationModel, y[1:m2])
 
-    @variable(myMethodModel, u[1:m] >=0)
+    @variable(orientationModel, u[1:m], Bin)
 
-    @variable(myMethodModel, v[1:m] >=0)
+    fix(u[1], 1; force = true)
 
-    transmatdiag = v
-    transmatofdiag = u
+    v = u.-1/2
 
-    #transmat = reduce(hcat,fill(u,m))+diagm(v)
+    @objective(orientationModel, Max, c' * x + h' * y)
 
-    transmat = reduce(vcat,fill(transmatofdiag,m)') -
-    diagm(transmatofdiag) + diagm(transmatdiag)
-
-    #@objective(myMethodModel, Max,
-    #    c'*(x-(1/2)*(sign.(c).*u.+sum(y.*sign.(c))))
-    #)
-
-    @objective(myMethodModel, Max,
-        c' * (x + 1/2 .* transmat*sign.(c))
+    @constraint(orientationModel, mainConstraint1,
+        A * (x+v/2) + G*y .<= b-sum(abs.(A), dims=2)/4
     )
 
-    #@constraint(myMethodModel, MainCon[i=1:n],
-    #    A[i,:]'*(x+(1/2)*(sign.(A[i,:]).*u.+sum(u.*v.*sign.(A[i,:])))) <= b[i]
-    #)
-
-    #@constraint(myMethodModel, MainCon[i=1:n],
-    #    A[i,:]'*(x+(1/2)*(sign.(A[i,:]).*u.+sum(y.*sign.(A[i,:])))) <= b[i]
-    #)
-
-    @constraint(myMethodModel, MainCon[i=1:n],
-        A[i,:]' * (x + 1/2 .* transmat*sign.(A[i,:])) <= b[i]
+    @constraint(orientationModel, mainConstraint2,
+        A * (x-v/2) + G*y .<= b-sum(abs.(A), dims=2)/4
     )
 
-    @constraint(myMethodModel, validity,
-        transmat * fill(1,m) .>= fill(1,m)
-    )
+    JuMP.optimize!(orientationModel)
 
-    @constraint(myMethodModel, orientationMin,
-        0 .<= transmatdiag + transmatofdiag.*mini
-    )
-
-    #shouldn't need if offdiag is non-negative
-    #@constraint(myMethodModel, orientationMax,
-    #    0 .<= transmatdiag + transmatofdiag.*maxi
-    #)
-
-    #TT = stdout # save original STDOUT stream
-    #redirect_stdout()
-    #set_optimizer_attribute(myMethodModel, "CPX_PARAM_EPRHS", 1e-4)
-
-    optimize!(myMethodModel)
-
-    #println(termination_status(myMethodModel))
-    #redirect_stdout(TT)
-
-    return objective_value(myMethodModel), value.(x) .*orientation, value.(u), value.(v)
-
-    #if termination_status(myMethodModel) == MOI.OPTIMAL
-    #    return objective_value(myMethodModel), value.(x), value.(v)
-    #else
-    #    return NaN, ones(m)*NaN, ones(m)*NaN
-    #end
+    return value.(x), value.(y), (2*round.(Int,value.(u)) .-1)
 end
+
+
 
 
 function finding_bounds(A,b,c,tol)
     A = rationalize.(float.(A))
     b = float.(b)
     relax!(A,b,tol)
-    flotSol, orientation = orientationMIP(A,b,c)
+    flotSol, orientation = findOrientation(A,b,c)
     A = A.*orientation'
     c = c.*orientation
     uMin,uMax = transformationMatrixBoundsWithC(A,c)
@@ -250,7 +150,7 @@ function finding_bounds_xor(n,tol)
     b = rationalize.(float.(b))
     tol = rationalize.(tol)
     A,b = relax(A,b,tol)
-    flotSol, orientation = orientationMIP(A,b,c)
+    flotSol, orientation = findOrientation(A,b,c)
     A = A.*orientation'
     c = c.*orientation
     dMin,dMax = transformationMatrixBoundsWithC(A,c)
@@ -261,7 +161,7 @@ function housekeeping(A,b,c,tol)
     A = rationalize.(float.(A))
     b = rationalize.(float.(b))
     A,b = relax(A,b,rationalize.(tol))
-    flotSol, orientation = orientationMIP(A,b,c)
+    flotSol, orientation = findOrientation(A,b,c)
     A = A.*orientation'
     c = c.*orientation
     dMin,dMax = transformationMatrixBoundsWithC(A,c)
@@ -317,207 +217,50 @@ function qSolve(d,A,b,c)
     return objective_value(myMethodModel), value.(x), value.(q)
 end
 
-function NLsolveVersion(A,b,c,dMin)
+
+function qSolveMIP(d,A,G,b,c,h, ystart)
     m,n = size(A)
-    myMethodModel = Model(NLopt.Optimizer)
-
-    set_optimizer_attribute(myMethodModel, "algorithm", :LD_MMA)
-
+    m2,n2 = size(G)
+    myMethodModel = Model(CPLEX.Optimizer)
+    set_silent(myMethodModel)
     @variable(myMethodModel, x[1:n])
+
+    @variable(myMethodModel, y[i=1:n2], start = ystart[i])
 
     @variable(myMethodModel, q[1:n] >=0)
 
-    @variable(myMethodModel, d[1:n] >=0)
+    transmat = reduce(vcat,fill(d.*q,n)')+diagm(q)
+    r = zeros(n)
+    s = zeros(n)
 
-    #@variable(myMethodModel, u[1:n])
-
-    transmat = reduce(vcat,fill(d .* q,n)')+diagm(q)
-    #r = d .* (sign.(d).==1)
-    #s = -d .* (sign.(d).==-1)
-
-    #rSum = sum(r)
-    #sSum = sum(s)
-    #dSum = sum(d)
+    r[sign.(d).==1] = d[sign.(d).==1]
+    s[sign.(d).==-1] = -d[sign.(d).==-1]
 
     @objective(myMethodModel, Max,
-        c' * (x - 1/2 .* transmat*sign.(c))
-        #c'*x
+        c' * (x + 1/2 .* transmat*sign.(c)) + h' * y
     )
 
     @constraint(myMethodModel, MainCon[i=1:m],
-        A[i,:]' * (x + 1/2 .* transmat*sign.(A[i,:])) <= b[i]
+        A[i,:]' * (x + 1/2 .* transmat*sign.(A[i,:])) + G[i,:]'*y <= b[i]
     )
 
-    @constraint(myMethodModel, OrderCon[i=1:n],
-        -d[i]<=(q[i]-1)*(1+sum(d))
+    @constraint(myMethodModel, rCon[i=1:n],
+        #1 + rSum -r[i]<=q[i]*(1+dSum)
+        1+sum(r[j] for j in filter(filt -> filt!=i, 1:n))<= q[i]*(1+sum(d[j] for j in 1:n))
     )
 
-    @constraint(myMethodModel, dCon1,
-        -1 .<= d .* dMin
+    @constraint(myMethodModel, sCon[i=1:n],
+        #sSum -s[i]<=q[i]*(1+dSum
+        -sum(s[j] for j in filter(filt -> filt!=i, 1:n)) <= q[i]*(1+sum(d[j] for j in 1:n))
     )
 
-    #@constraint(myMethodModel, dDefineCon,
-    #    d .* q .>= u
-    #)
-
-    JuMP.optimize!(myMethodModel)
-
-
-    return objective_value(myMethodModel), value.(x), value.(q), value.(d)
-end
-
-
-function NLsolveVersion2(A,b,c,dMin,dMax)
-    m,n = size(A)
-    myMethodModel = Model(NLopt.Optimizer)
-
-    set_optimizer_attribute(myMethodModel, "algorithm", :LD_MMA)
-
-    #set_optimizer_attribute(myMethodModel, "xtol_rel", 0.1)
-    @variable(myMethodModel, x[1:n])
-
-    @variable(myMethodModel, q[1:n] >=0)
-
-    @variable(myMethodModel, d[1:n])
-
-    @variable(myMethodModel, r[1:n] >=0)
-
-    @variable(myMethodModel, s[1:n] >=0)
-
-    #@variable(myMethodModel, u[1:n])
-
-    transmat = reduce(vcat,fill(d .* q,n)')+diagm(q)
-
-    #r = d .* (sign.(d).==1)
-    #s = -d .* (sign.(d).==-1)
-
-    #rSum = sum(r)
-    #sSum = sum(s)
-    #dSum = sum(d)
-
-
-    @NLobjective(myMethodModel, Max,
-        c' * (x + 1/2 .* transmat*sign.(c))
-        #c'*x
-    )
-
-    @NLconstraint(myMethodModel, MainCon[i=1:m],
-        A[i,:]' * (x + 1/2 .* transmat*sign.(A[i,:])) <= b[i]
-    )
-
-    @NLconstraint(myMethodModel, OrderCon1[i=1:n],
-        1+sum(r[j] for j in 1:n)-r[i] <= q[i]*(1+sum(d[j] for j in 1:n))
-    )
-
-    @NLconstraint(myMethodModel, OrderCon2[i=1:n],
-        sum(s[j] for j in 1:n)-s[i] <= q[i]*(1+sum(d[j] for j in 1:n))
-    )
-
-    @constraint(myMethodModel, dConMin,
-        -1 .<= d .* dMin
-    )
-
-    @constraint(myMethodModel, dConMax,
-        -1 .<= d .* dMax
-    )
-
-    @constraint(myMethodModel, determminantCon,
-        sum(d)>=-1
-    )
-
-    @constraint(myMethodModel, rCon,
-        r .>= d
-    )
-
-    @constraint(myMethodModel, sCon,
-        s .>= -d
-    )
-    #@constraint(myMethodModel, dDefineCon,
-    #    d .* q .>= u
-    #)
     println(myMethodModel)
     JuMP.optimize!(myMethodModel)
     println(termination_status(myMethodModel))
-    return objective_value(myMethodModel), value.(x), value.(q), value.(d)
+
+    return objective_value(myMethodModel), value.(x), value.(y), value.(q)
 end
 
-#use uv
-function NLsolveVersion3(A,b,c,dMin,dMax)
-    m,n = size(A)
-    myMethodModel = Model(NLopt.Optimizer)
-
-    set_optimizer_attribute(myMethodModel, "algorithm", :LD_MMA)
-
-    @variable(myMethodModel, x[1:n])
-
-    @variable(myMethodModel, q[1:n] >=0)
-
-    #@variable(myMethodModel, d[1:n])
-    @variable(myMethodModel, u[1:n])
-
-
-    @variable(myMethodModel, r[1:n] >=0)
-
-    @variable(myMethodModel, s[1:n] >=0)
-
-    #@variable(myMethodModel, u[1:n])
-    #d = u./q
-
-    transmat = reduce(vcat,fill(u,n)')+diagm(q)
-
-    #r = d .* (sign.(d).==1)
-    #s = -d .* (sign.(d).==-1)
-
-    #rSum = sum(r)
-    #sSum = sum(s)
-    #dSum = sum(d)
-
-
-    @objective(myMethodModel, Max,
-        c' * (x - 1/2 .* transmat*sign.(c))
-        #c'*x
-    )
-
-    @constraint(myMethodModel, MainCon[i=1:m],
-        A[i,:]' * (x + 1/2 .* transmat*sign.(A[i,:])) <= b[i]
-    )
-
-    @NLconstraint(myMethodModel, OrderCon1[i=1:n],
-        1+sum(r[j] for j in 1:n)-r[i] <= q[i]*(1+sum(u[j] / q[j] for j in 1:n))
-    )
-
-    @NLconstraint(myMethodModel, OrderCon2[i=1:n],
-        sum(s[j] for j in 1:n)-s[i] <= q[i]*(1+sum(u[j] / q[j] for j in 1:n))
-    )
-
-    @constraint(myMethodModel, dConMin,
-        0 .<=q+ u.* dMin
-    )
-
-    @constraint(myMethodModel, dConMax,
-        0 .<=q+ u.* dMax
-    )
-
-    @NLconstraint(myMethodModel, determminantCon,
-        sum(u[j] / q[j] for j in 1:n)>=-1
-    )
-
-    @constraint(myMethodModel, rCon,
-        r .* q .>= u
-    )
-
-    @constraint(myMethodModel, sCon,
-        s .* q .>= -u
-    )
-    #@constraint(myMethodModel, dDefineCon,
-    #    d .* q .>= u
-    #)
-
-    JuMP.optimize!(myMethodModel)
-
-
-    return objective_value(myMethodModel), value.(x), value.(q), value.(d)
-end
 
 
 function NLsolveVersion4(A,b,c,dMin,dMax)
@@ -543,7 +286,8 @@ function NLsolveVersion4(A,b,c,dMin,dMax)
     u = ones(n)
     d = r - s
 
-    transmat = transpose((d.*q)*u') +diagm(q)
+    #transmat = transpose((d.*q)*u') +diagm(q)
+    transmat = reduce(vcat,fill(d.*q,n)')+diagm(q)
 
     objfun = c' * (x + 1/2 .* transmat*sign.(c))
 
@@ -614,7 +358,73 @@ function NLsolveVersion4(A,b,c,dMin,dMax)
     return objective_value(myMethodModel), value.(x), value.(q), value.(r), value.(s)
 end
 
+function NLsolveMIP(A,G,b,c,h,dMin,dMax, ystart)
+    m,n = size(A)
+    m2,n2 = size(G)
+    myMethodModel = Model(NLopt.Optimizer)
 
+    set_optimizer_attribute(myMethodModel, "algorithm", :LD_MMA)
+
+    @variable(myMethodModel, x[1:n])
+
+    @variable(myMethodModel, q[1:n] >=0, start = 1)
+
+    @variable(myMethodModel, r[1:n] >=0, start = 0)
+
+    @variable(myMethodModel, s[1:n] >=0, start = 0)
+
+    @variable(myMethodModel, y[i=1:n2], start = ystart[i])
+
+    u = ones(n)
+    d = r - s
+
+    transmat = transpose((d.*q)*u') +diagm(q)
+
+    objfun = c' * (x + 1/2 .* transmat*sign.(c)) + h' * y
+
+
+    mainfun = zeros(QuadExpr,m)
+    for i in 1:m
+        mainfun[i] = A[i,:]' * (x + 1/2 .* transmat*sign.(A[i,:]))
+    end
+
+    mainfun = mainfun + G * y
+
+    @NLobjective(myMethodModel, Max,
+        objfun
+    )
+
+    @NLconstraint(myMethodModel, MainCon[i=1:m],
+        mainfun[i] <= b[i]
+    )
+
+    @NLconstraint(myMethodModel, OrderCon1[i=1:n],
+        1+sum(r[j] for j in filter(filt -> filt!=i, 1:n))<= q[i]*(1+sum(d[j] for j in 1:n))
+    )
+
+    @NLconstraint(myMethodModel, OrderCon2[i=1:n],
+        -sum(s[j] for j in filter(filt -> filt!=i, 1:n)) <= q[i]*(1+sum(d[j] for j in 1:n))
+    )
+
+    @NLconstraint(myMethodModel, dConMin[i=1:n],
+        -1 <= d[i]*dMin[i]
+    )
+
+    @NLconstraint(myMethodModel, dConMax[i=1:n],
+        -1 <= d[i]*dMax[i]
+    )
+
+    @NLconstraint(myMethodModel, determminantCon,
+        sum(d[j] for j in 1:n)>=-1
+    )
+
+    println(myMethodModel)
+    JuMP.optimize!(myMethodModel)
+    println(termination_status(myMethodModel))
+
+
+    return objective_value(myMethodModel), value.(x), value.(y), value.(q), value.(r), value.(s)
+end
 
 
 function IntSolve(x,q,d,A,b,c)
@@ -682,6 +492,40 @@ function IntSolve(x,q,d,A,b,c)
 end
 
 
+function IntSolveMIP(x,y,q,d,A,G,b,c,h)
+    n=length(x)
+    n2 = length(y)
+    IntModel = Model(CPLEX.Optimizer)
+
+    set_silent(IntModel)
+    @variable(IntModel, gamma[1:n], Int)
+
+    @variable(IntModel, theta[i=1:n2], start = y[i])
+
+    @objective(IntModel, Max, c' * gamma + h' * theta)
+
+    x2= gamma - x
+
+
+    @constraint(IntModel, mainConstraint1[i=1:n],
+        x2[i]+sum(d[j]*(x2[i]-x2[j]) for j in 1:n) <= q[i]*(1+sum(d))/2
+    )
+
+    @constraint(IntModel, mainConstraint2[i=1:n],
+        x2[i]+sum(d[j]*(x2[i]-x2[j]) for j in 1:n) >= -q[i]*(1+sum(d))/2
+    )
+
+    @constraint(IntModel, originalConstraints,
+        A*gamma + G*theta .<=b
+    )
+
+
+    println(IntModel)
+    JuMP.optimize!(IntModel)
+    println(termination_status(IntModel))
+    return objective_value(IntModel), value.(gamma), value.(theta)
+end
+
 function testing(n,tol)
     A, b, c, dMin, dMax = finding_bounds_xor(n,tol)
     #b=rationalize.(b)
@@ -701,7 +545,7 @@ function testing2(AOrig,bOrig,cOrig,tol)
     A = rationalize.(float.(AOrig))
     b = rationalize.(float.(bOrig))
     A,b = relax(A,b,rationalize.(tol))
-    flotSol, orientation = orientationMIP(A,b,cOrig)
+    flotSol, orientation = findOrientation(A,b,cOrig)
     A = A.*orientation'
     c = cOrig.*orientation
     dMin,dMax = transformationMatrixBoundsWithC(A,c)
@@ -715,18 +559,42 @@ function testing2(AOrig,bOrig,cOrig,tol)
     return AOrig, bOrig, cOrig, q2, d, trueobj, truex, all(AOrig*truex .<= bOrig)
 end
 
+function testingMIP(AOrig,G,bOrig,cOrig,h,tol)
+    A = rationalize.(float.(AOrig))
+    b = rationalize.(float.(bOrig))
+    A,b = relax(A,b,rationalize.(tol))
+    flotSol, yStart, orientation = findOrientationMIP(A,G,b,cOrig,h)
+    A = A.*orientation'
+    c = cOrig.*orientation
+    dMin,dMax = transformationMatrixBoundsWithC(A,c)
 
-function oldstuff()
+    obj, x, y, q, d = NLsolveMIP(A,G,b,c,h,dMin,dMax, yStart)
 
-    relax!(A,b,tol)
+    obj2,x2,y2,q2 = qSolveMIP(d,A,G,b,c,h, y)
+    trueobj, truex, truey = IntSolveMIP(x2,y2,q2,d,A,G,bOrig,c,h)
 
-    #this is wrong need to do orientation first as that can massively impact bounds on u
-    mini, maxi = transformationMatrixBounds([A; c']) #include c in orientation constriants
+    truex = truex.*orientation
+    return AOrig, bOrig, cOrig, q2, d, trueobj, truex,truey, all(AOrig*truex+G*truey .<= bOrig)
+end
 
-    flotSol, orientation = orientationMIP(A,b,c)
+function SolveMIP(A,G,b,c,h)
+    m,n = size(A)
+    m2,n2 = size(G)
+    IntModel = Model(CPLEX.Optimizer)
+    @variable(IntModel, x[1:n], Int)
+    @variable(IntModel, y[1:n2])
+    @objective(IntModel, Max, c' * x + h' * y)
+    @constraint(IntModel, MainCon, A*x + G*y .<= b)
+    JuMP.optimize!(IntModel)
+    return objective_value(IntModel), value.(x), value.(y)
+end
 
-    ~,~,uactual,vactual =myMethodUV(A,b,c,mini,orientation)
-
-    n,m = size(A)
-    actualT = reduce(vcat,fill(uactual,m)') -diagm(uactual) + diagm(vactual)
+function SolveINT(A,b,c)
+    m,n = size(A)
+    IntModel = Model(CPLEX.Optimizer)
+    @variable(IntModel, x[1:n], Int)
+    @objective(IntModel, Max, c' * x)
+    @constraint(IntModel, MainCon, A*x.<= b)
+    JuMP.optimize!(IntModel)
+    return objective_value(IntModel), value.(x)
 end
