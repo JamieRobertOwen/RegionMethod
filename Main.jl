@@ -603,12 +603,12 @@ function IntSolveMIP(x,y,q,d,A,G,b,c,h)
     return objective_value(IntModel), value.(gamma), value.(theta)
 end
 
-function presolve(A,b,c,tol)
+function presolve(AOrig,bOrig,cOrig,tol)
     A = rationalize.(float.(AOrig))
     b = rationalize.(float.(bOrig))
     c = rationalize.(float.(cOrig))
     A,btight = relax(A,b)
-    b = floor.(btight) + 1//1 - rationalize(tol)
+    b = floor.(btight) .+ (1//1 - rationalize(tol))
     flotSol, orientation = findOrientation(A,b,c)
     A = A.*orientation'
     c = c.*orientation
@@ -617,30 +617,23 @@ function presolve(A,b,c,tol)
     return A,b,c,dMin,dMax,btight,orientation
 end
 
-function presolveMIP(A,G,b,c,h,tol)
+function presolveMIP(AOrig,GOrig,bOrig,cOrig,h,tol)
     A = rationalize.(float.(AOrig))
     b = rationalize.(float.(bOrig))
     G = rationalize.(float.(GOrig))
     c = rationalize.(float.(cOrig))
     A,G,btight = relaxMIP(A,G,b)
-    b = floor.(btight) + 1//1 - rationalize(tol)
-    flotSol, orientation = findOrientation(A,b,c)
+    b = floor.(btight) .+ (1//1 - rationalize(tol))
+    flotSol,yStart, orientation = findOrientationMIP(A,G,b,c,h)
     A = A.*orientation'
     c = c.*orientation
     dMin,dMax = transformationMatrixBoundsWithC(A,c)
 
-    return A,b,c,dMin,dMax,btight,orientation
+    return A,G,b,c,dMin,dMax,yStart,btight,orientation
 end
 
 function testing2(AOrig,bOrig,cOrig,tol)
-    A = rationalize.(float.(AOrig))
-    b = rationalize.(float.(bOrig))
-    c = rationalize.(float.(cOrig))
-    A,b = relax(A,b,rationalize.(tol))
-    flotSol, orientation = findOrientation(A,b,c)
-    A = A.*orientation'
-    c = c.*orientation
-    dMin,dMax = transformationMatrixBoundsWithC(A,c)
+    A,b,c,dMin,dMax,btight,orientation = presolve(AOrig,bOrig,cOrig,tol)
 
     obj, x, q, d = NLsolveVersion4(A,b,c,dMin,dMax)
 
@@ -648,30 +641,24 @@ function testing2(AOrig,bOrig,cOrig,tol)
     #trueobj, truex = IntSolve(x2,q2,d,A,bOrig,c)
 
     #slack variable version - may be more temperamental
-    trueobj, truex = IntSolve2(x2,q2,d,A,b,c)
+    trueobj, truex = IntSolve2(x2,q2,d,A,btight,c)
 
     truex = truex.*orientation
-    return AOrig, bOrig, cOrig, q2, d, trueobj, truex, all(AOrig*truex .<= bOrig)
+    return q2, d, trueobj, truex, all(AOrig*truex .<= bOrig)
 end
 
 function testingMIP(AOrig,GOrig,bOrig,cOrig,h,tol)
-    A = rationalize.(float.(AOrig))
-    b = rationalize.(float.(bOrig))
-    G = rationalize.(float.(GOrig))
-    c = rationalize.(float.(cOrig))
-    A,G,b = relaxMIP(A,G,b,rationalize.(tol))
-    flotSol, yStart, orientation = findOrientationMIP(A,G,b,c,h)
-    A = A.*orientation'
-    c = c.*orientation
-    dMin,dMax = transformationMatrixBoundsWithC(A,c)
+
+    A,G,b,c,dMin,dMax,yStart,btight,orientation = presolveMIP(AOrig,GOrig,bOrig,cOrig,h,tol)
+
 
     obj, x, y, q, d = NLsolveMIP(A,G,b,c,h,dMin,dMax, yStart)
 
     obj2,x2,y2,q2 = qSolveMIP(d,A,G,b,c,h, y)
-    trueobj, truex, truey = IntSolveMIP(x2,y2,q2,d,A,G,b,c,h)
+    trueobj, truex, truey = IntSolveMIP(x2,y2,q2,d,A,G,btight,c,h)
 
     truex = truex.*orientation
-    return AOrig, bOrig, cOrig, q2, d, trueobj, truex,truey, all(AOrig*truex+G*truey .<= bOrig)
+    return q2, d, trueobj, truex,truey, all(AOrig*truex+G*truey .<= bOrig)
 end
 
 function SolveMIP(A,G,b,c,h)
@@ -697,15 +684,8 @@ function SolveINT(A,b,c)
 end
 
 function plot2Dexample(AOrig,bOrig,cOrig,tol,resolution,solPercentile)
-    A = rationalize.(float.(AOrig))
-    b = rationalize.(float.(bOrig))
-    c = rationalize.(float.(cOrig))
-    A,b = relax(A,b,rationalize.(tol))
-    flotSol, orientation = findOrientation(A,b,c)
-    A = A.*orientation'
-    c = c.*orientation
-    #should have error handling for if dMin and dMax are infinite
-    dMin,dMax = transformationMatrixBoundsWithC(A,c)
+
+    A,b,c,dMin,dMax,btight,orientation = presolve(AOrig,bOrig,cOrig,tol)
     all([sign.(dMin).==-1 ; sign.(dMax).==1]) || throw("lack of bounds on d")
     Results = DataFrames.DataFrame(
     d1 = Float64[],
@@ -722,9 +702,10 @@ function plot2Dexample(AOrig,bOrig,cOrig,tol,resolution,solPercentile)
     # need to add error checking here
     for i = range(-1/dMax[1],-1/dMin[1], length =resolution)
         for j = range(-1/dMax[2],-1/dMin[2], length =resolution)
+
             preobj,x,q = qSolve2([i,j],A,b,c,solPercentile)
             if isnan(preobj) == false
-                trueobj, truex = IntSolve2(x,q,[i,j],A,bOrig,c)
+                trueobj, truex = IntSolve2(x,q,[i,j],A,btight,c)
                 push!(Results, (float(i),float(j), q[1],q[2], preobj, trueobj))
             else
                 push!(Results,(float(i),float(j), NaN, NaN, NaN, NaN))
