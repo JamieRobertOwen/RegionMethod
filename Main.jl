@@ -1,4 +1,4 @@
-using JuMP, CPLEX, LinearAlgebra, NLopt
+using JuMP, CPLEX, LinearAlgebra, NLopt, DataFrames, PlotlyJS
 
 
 #test cases
@@ -20,7 +20,7 @@ b = float.(b)
 
 
 
-function relax(A::AbstractMatrix{<:Rational{Int64}},b::AbstractVector{<:Rational{Int64}},tol::Rational{Int64})
+function relax(A::AbstractMatrix{<:Rational{Int64}},b::AbstractVector{<:Rational{Int64}})
     #takes a IP of form Ax<=b and relaxes b using rao cuts
 
     #rationalize.(float.(A)) to convert A from Int64 to rational
@@ -30,28 +30,37 @@ function relax(A::AbstractMatrix{<:Rational{Int64}},b::AbstractVector{<:Rational
         rowgcd = gcd(row)
         if rowgcd != 0
             A[index,:] = A[index,:]/rowgcd
-            b[index] = fld(b[index],rowgcd)+1//1-tol
+            b[index] = b[index]/rowgcd
         end
     end
     return A,b
 end
 
+function relaxMIP(A::AbstractMatrix{<:Rational{Int64}},G,b::AbstractVector{<:Rational{Int64}})
+    #takes a IP of form Ax<=b and relaxes b using rao cuts
+
+    #rationalize.(float.(A)) to convert A from Int64 to rational
+    size(A,1) == size(b,1) || throw(DimensionMismatch("A and b must have the same number of rows"))
+
+    for (index, row) in enumerate(eachrow(A))
+        rowgcd = gcd(row)
+        if rowgcd != 0
+            A[index,:] = A[index,:]/rowgcd
+            G[index,:] = G[index,:]/rowgcd
+            b[index] = b[index]/rowgcd
+        end
+    end
+
+    return A,G,b
+end
+
+
 function transformationMatrixBoundsWithC(A::AbstractMatrix, c::AbstractVector)
     A= [A; c']
     rowsum = sum(A,dims=2)
     Areciprical = 1 ./ A
-    umin= zeros(size(A,2))
-    umax= zeros(size(A,2))
-
-    #for (index, col) in enumerate(eachcol(Areciprical.*rowsum))
-    #    umin[index] = minimum(col[isfinite.(col)])
-    #    umax[index] = maximum(col[isfinite.(col)])
-    #end
-
-    #for (index, col) in enumerate(eachcol(1 ./ A))
-    #    umin[index] = minimum(col[isfinite.(col)] .* rowsum[isfinite.(col)])
-    #    umax[index] = maximum(col[isfinite.(col)] .* rowsum[isfinite.(col)])
-    #end
+    umin= zeros(Rational,size(A,2))
+    umax= zeros(Rational,size(A,2))
 
     for (index, col) in enumerate(eachcol(A))
         umin[index] = minimum(rowsum[col.!=0] ./ col[col.!=0])
@@ -127,48 +136,6 @@ function findOrientationMIP(A,G,b,c,h)
     return value.(x), value.(y), (2*round.(Int,value.(u)) .-1)
 end
 
-
-
-
-function finding_bounds(A,b,c,tol)
-    A = rationalize.(float.(A))
-    b = float.(b)
-    relax!(A,b,tol)
-    flotSol, orientation = findOrientation(A,b,c)
-    A = A.*orientation'
-    c = c.*orientation
-    uMin,uMax = transformationMatrixBoundsWithC(A,c)
-    return uMin, uMax
-end # functions
-
-function finding_bounds_xor(n,tol)
-
-    A = [ones(n)' ; -I]
-    b = [1 ; zeros(n)]
-    c = ones(n)
-    A = rationalize.(float.(A))
-    b = rationalize.(float.(b))
-    tol = rationalize.(tol)
-    A,b = relax(A,b,tol)
-    flotSol, orientation = findOrientation(A,b,c)
-    A = A.*orientation'
-    c = c.*orientation
-    dMin,dMax = transformationMatrixBoundsWithC(A,c)
-    return A, b, c, dMin, dMax
-end # functions
-
-function housekeeping(A,b,c,tol)
-    A = rationalize.(float.(A))
-    b = rationalize.(float.(b))
-    A,b = relax(A,b,rationalize.(tol))
-    flotSol, orientation = findOrientation(A,b,c)
-    A = A.*orientation'
-    c = c.*orientation
-    dMin,dMax = transformationMatrixBoundsWithC(A,c)
-    return A, b, c, dMin, dMax
-end
-
-
 function qSolve(d,A,b,c)
     m,n = size(A)
     myMethodModel = Model(CPLEX.Optimizer)
@@ -192,8 +159,8 @@ function qSolve(d,A,b,c)
     #dSum = sum(d)
 
     @objective(myMethodModel, Max,
-        c' * (x + 1/2 .* transmat*sign.(c))
-        #c'*x
+        #c' * (x - 1/2 .* transmat*sign.(c))
+        c'*x
     )
 
     @constraint(myMethodModel, MainCon[i=1:m],
@@ -214,7 +181,63 @@ function qSolve(d,A,b,c)
     JuMP.optimize!(myMethodModel)
     println(termination_status(myMethodModel))
 
-    return objective_value(myMethodModel), value.(x), value.(q)
+    if termination_status(myMethodModel) == OPTIMAL
+        return objective_value(myMethodModel), value.(x), value.(q)
+    else
+        return NaN,NaN,NaN
+    end
+end
+
+
+function qSolve2(d,A,b,c,solPercentile)
+    m,n = size(A)
+    myMethodModel = Model(CPLEX.Optimizer)
+    set_silent(myMethodModel)
+    @variable(myMethodModel, x[1:n])
+
+    @variable(myMethodModel, q[1:n] >=0)
+
+    transmat = reduce(vcat,fill(d.*q,n)')+diagm(q)
+    r = zeros(n)
+    s = zeros(n)
+
+    r[sign.(d).==1] = d[sign.(d).==1]
+    #r = d .* (sign.(d).==1)
+    #s = -d .* (sign.(d).==-1)
+    s[sign.(d).==-1] = -d[sign.(d).==-1]
+
+
+    #rSum = sum(r)
+    #sSum = sum(s)
+    #dSum = sum(d)
+
+    @objective(myMethodModel, Max,
+        c' * (x + solPercentile*(1/2 .* transmat*sign.(c)))
+        #c'*x
+    )
+    @constraint(myMethodModel, MainCon[i=1:m],
+        A[i,:]' * (x + 1/2 .* transmat*sign.(A[i,:])) <= b[i]
+    )
+
+    @constraint(myMethodModel, rCon[i=1:n],
+        #1 + rSum -r[i]<=q[i]*(1+dSum)
+        1+sum(r[j] for j in filter(filt -> filt!=i, 1:n))<= q[i]*(1+sum(d[j] for j in 1:n))
+    )
+
+    @constraint(myMethodModel, sCon[i=1:n],
+        #sSum -s[i]<=q[i]*(1+dSum
+        -sum(s[j] for j in filter(filt -> filt!=i, 1:n)) <= q[i]*(1+sum(d[j] for j in 1:n))
+    )
+
+    #println(myMethodModel)
+    JuMP.optimize!(myMethodModel)
+    #println(termination_status(myMethodModel))
+
+    if termination_status(myMethodModel) == OPTIMAL
+        return objective_value(myMethodModel), value.(x), value.(q)
+    else
+        return NaN,NaN,NaN
+    end
 end
 
 
@@ -237,7 +260,8 @@ function qSolveMIP(d,A,G,b,c,h, ystart)
     s[sign.(d).==-1] = -d[sign.(d).==-1]
 
     @objective(myMethodModel, Max,
-        c' * (x + 1/2 .* transmat*sign.(c)) + h' * y
+        #c' * (x + 1/2 .* transmat*sign.(c)) + h' * y
+        c'*x+h' * y
     )
 
     @constraint(myMethodModel, MainCon[i=1:m],
@@ -289,7 +313,9 @@ function NLsolveVersion4(A,b,c,dMin,dMax)
     #transmat = transpose((d.*q)*u') +diagm(q)
     transmat = reduce(vcat,fill(d.*q,n)')+diagm(q)
 
-    objfun = c' * (x + 1/2 .* transmat*sign.(c))
+    #objfun = c' * (x + 1/2 .* transmat*sign.(c))
+
+    objfun = c' * x
 
     #mainfun = A[i,:]' * (x + 1/2 .* transmat*sign.(A[i,:]))
     mainfun = zeros(QuadExpr,m)
@@ -355,7 +381,7 @@ function NLsolveVersion4(A,b,c,dMin,dMax)
     println(termination_status(myMethodModel))
 
 
-    return objective_value(myMethodModel), value.(x), value.(q), value.(r), value.(s)
+    return objective_value(myMethodModel), value.(x), value.(q), value.(r)-value.(s)
 end
 
 function NLsolveMIP(A,G,b,c,h,dMin,dMax, ystart)
@@ -380,8 +406,8 @@ function NLsolveMIP(A,G,b,c,h,dMin,dMax, ystart)
 
     transmat = transpose((d.*q)*u') +diagm(q)
 
-    objfun = c' * (x + 1/2 .* transmat*sign.(c)) + h' * y
-
+    #objfun = c' * (x + 1/2 .* transmat*sign.(c)) + h' * y
+    objfun = c' * x  + h' * y
 
     mainfun = zeros(QuadExpr,m)
     for i in 1:m
@@ -423,7 +449,7 @@ function NLsolveMIP(A,G,b,c,h,dMin,dMax, ystart)
     println(termination_status(myMethodModel))
 
 
-    return objective_value(myMethodModel), value.(x), value.(y), value.(q), value.(r), value.(s)
+    return objective_value(myMethodModel), value.(x), value.(y), value.(q), value.(r)-value.(s)
 end
 
 
@@ -482,9 +508,60 @@ function IntSolve(x,q,d,A,b,c)
     )
 
 
-    println(IntModel)
+    #println(IntModel)
     JuMP.optimize!(IntModel)
-    println(termination_status(IntModel))
+    #println(termination_status(IntModel))
+
+    #println(primal_feasibility_report(IntModel, Dict(gamma .=> [2.0,0.0,0.0,1.0]) ))
+
+    return objective_value(IntModel), value.(gamma)
+end
+
+
+function IntSolve2(x,q,d,A,b,c)
+    n=length(x)
+    IntModel = Model(CPLEX.Optimizer)
+
+    set_silent(IntModel)
+    @variable(IntModel, gamma[1:n], Int)
+
+    @variable(IntModel, -1/2 <= s[1:n] <= 1/2)
+
+    @objective(IntModel, Max, c' * gamma)
+
+    transmat = reduce(vcat,fill(d .* q,n)')+diagm(q)
+
+    #v = d.*q
+    #u = ones(n)
+    #Ainv = diagm(1 ./q)
+
+    #mult = 1 + v'*Ainv*u
+
+    #lhs = Ainv-(Ainv*u*v'*Ainv)/mult
+
+
+    x2= gamma - x
+
+    #@constraint(IntModel, mainConstraint1[i=1:n],
+    #    x2[i]+sum(d[j]*(x2[i]-x2[j]) for j in 1:n) <= q[i]*(1+sum(d))/2
+    #)
+
+    @constraint(IntModel, mainConstraint,
+        x2.==transmat * s
+    )
+
+    #@constraint(IntModel, mainConstraint2[i=1:n],
+    #    x2[i]+sum(d[j]*(x2[i]-x2[j]) for j in 1:n) >= -q[i]*(1+sum(d))/2
+    #)
+
+    @constraint(IntModel, originalConstraints,
+        A*gamma .<=b
+    )
+
+
+    #println(IntModel)
+    JuMP.optimize!(IntModel)
+    #println(termination_status(IntModel))
 
     #println(primal_feasibility_report(IntModel, Dict(gamma .=> [2.0,0.0,0.0,1.0]) ))
 
@@ -526,52 +603,72 @@ function IntSolveMIP(x,y,q,d,A,G,b,c,h)
     return objective_value(IntModel), value.(gamma), value.(theta)
 end
 
-function testing(n,tol)
-    A, b, c, dMin, dMax = finding_bounds_xor(n,tol)
-    #b=rationalize.(b)
-    #obj, x, q, d = NLsolveVersion(A,b,c,dMin)
-    #obj, x, q, d = NLsolveVersion2(A,b,c,dMin,dMax)
-    #obj, x, q, d = NLsolveVersion3(A,b,c,dMin,dMax)
+function presolve(A,b,c,tol)
+    A = rationalize.(float.(AOrig))
+    b = rationalize.(float.(bOrig))
+    c = rationalize.(float.(cOrig))
+    A,btight = relax(A,b)
+    b = floor.(btight) + 1//1 - rationalize(tol)
+    flotSol, orientation = findOrientation(A,b,c)
+    A = A.*orientation'
+    c = c.*orientation
+    dMin,dMax = transformationMatrixBoundsWithC(A,c)
 
-    obj, x, q, d = NLsolveVersion4(A,b,c,dMin,dMax)
+    return A,b,c,dMin,dMax,btight,orientation
+end
 
-    obj2,x2,q2 = qSolve(d,A,b,c)
-    trueobj, truex = IntSolve(x2,q2,d,A,b,c)
+function presolveMIP(A,G,b,c,h,tol)
+    A = rationalize.(float.(AOrig))
+    b = rationalize.(float.(bOrig))
+    G = rationalize.(float.(GOrig))
+    c = rationalize.(float.(cOrig))
+    A,G,btight = relaxMIP(A,G,b)
+    b = floor.(btight) + 1//1 - rationalize(tol)
+    flotSol, orientation = findOrientation(A,b,c)
+    A = A.*orientation'
+    c = c.*orientation
+    dMin,dMax = transformationMatrixBoundsWithC(A,c)
 
-    return A, b, c, q2, d, trueobj, truex
+    return A,b,c,dMin,dMax,btight,orientation
 end
 
 function testing2(AOrig,bOrig,cOrig,tol)
     A = rationalize.(float.(AOrig))
     b = rationalize.(float.(bOrig))
+    c = rationalize.(float.(cOrig))
     A,b = relax(A,b,rationalize.(tol))
-    flotSol, orientation = findOrientation(A,b,cOrig)
+    flotSol, orientation = findOrientation(A,b,c)
     A = A.*orientation'
-    c = cOrig.*orientation
+    c = c.*orientation
     dMin,dMax = transformationMatrixBoundsWithC(A,c)
 
     obj, x, q, d = NLsolveVersion4(A,b,c,dMin,dMax)
 
     obj2,x2,q2 = qSolve(d,A,b,c)
-    trueobj, truex = IntSolve(x2,q2,d,A,bOrig,c)
+    #trueobj, truex = IntSolve(x2,q2,d,A,bOrig,c)
+
+    #slack variable version - may be more temperamental
+    trueobj, truex = IntSolve2(x2,q2,d,A,b,c)
 
     truex = truex.*orientation
     return AOrig, bOrig, cOrig, q2, d, trueobj, truex, all(AOrig*truex .<= bOrig)
 end
 
-function testingMIP(AOrig,G,bOrig,cOrig,h,tol)
+function testingMIP(AOrig,GOrig,bOrig,cOrig,h,tol)
     A = rationalize.(float.(AOrig))
     b = rationalize.(float.(bOrig))
-    A,b = relax(A,b,rationalize.(tol))
-    flotSol, yStart, orientation = findOrientationMIP(A,G,b,cOrig,h)
+    G = rationalize.(float.(GOrig))
+    c = rationalize.(float.(cOrig))
+    A,G,b = relaxMIP(A,G,b,rationalize.(tol))
+    flotSol, yStart, orientation = findOrientationMIP(A,G,b,c,h)
     A = A.*orientation'
-    c = cOrig.*orientation
+    c = c.*orientation
     dMin,dMax = transformationMatrixBoundsWithC(A,c)
 
     obj, x, y, q, d = NLsolveMIP(A,G,b,c,h,dMin,dMax, yStart)
 
     obj2,x2,y2,q2 = qSolveMIP(d,A,G,b,c,h, y)
-    trueobj, truex, truey = IntSolveMIP(x2,y2,q2,d,A,G,bOrig,c,h)
+    trueobj, truex, truey = IntSolveMIP(x2,y2,q2,d,A,G,b,c,h)
 
     truex = truex.*orientation
     return AOrig, bOrig, cOrig, q2, d, trueobj, truex,truey, all(AOrig*truex+G*truey .<= bOrig)
@@ -597,4 +694,69 @@ function SolveINT(A,b,c)
     @constraint(IntModel, MainCon, A*x.<= b)
     JuMP.optimize!(IntModel)
     return objective_value(IntModel), value.(x)
+end
+
+function plot2Dexample(AOrig,bOrig,cOrig,tol,resolution,solPercentile)
+    A = rationalize.(float.(AOrig))
+    b = rationalize.(float.(bOrig))
+    c = rationalize.(float.(cOrig))
+    A,b = relax(A,b,rationalize.(tol))
+    flotSol, orientation = findOrientation(A,b,c)
+    A = A.*orientation'
+    c = c.*orientation
+    #should have error handling for if dMin and dMax are infinite
+    dMin,dMax = transformationMatrixBoundsWithC(A,c)
+    all([sign.(dMin).==-1 ; sign.(dMax).==1]) || throw("lack of bounds on d")
+    Results = DataFrames.DataFrame(
+    d1 = Float64[],
+    d2 = Float64[],
+    q1 = Float64[],
+    q2 = Float64[],
+    preobj = Float64[],
+    actualobj = Float64[],
+    )
+    #generator = ModelGenerator(zeros(size(c)), A,b,c
+
+    #resolution = 20
+
+    # need to add error checking here
+    for i = range(-1/dMax[1],-1/dMin[1], length =resolution)
+        for j = range(-1/dMax[2],-1/dMin[2], length =resolution)
+            preobj,x,q = qSolve2([i,j],A,b,c,solPercentile)
+            if isnan(preobj) == false
+                trueobj, truex = IntSolve2(x,q,[i,j],A,bOrig,c)
+                push!(Results, (float(i),float(j), q[1],q[2], preobj, trueobj))
+            else
+                push!(Results,(float(i),float(j), NaN, NaN, NaN, NaN))
+            end
+        end
+    end
+
+    d1range = float.(collect(range(-1/dMax[1],-1/dMin[1], length =resolution)))
+    d2range = float.(collect(range(-1/dMax[2],-1/dMin[2], length =resolution)))
+
+    #d1results = Results.d1
+    #d2results = Results.d2
+    #preobjresults = Results.preobj
+
+    #d1resultsfilt = d1results[isnan.(preobjresults).==false]
+    #d2resultsfilt = d2results[isnan.(preobjresults).==false]
+    #preobjresultsfilt = preobjresults[isnan.(preobjresults).==false]
+
+    #this is the wrong way round for normal things but plotting is weird
+    resultsReshape = reshape(Results.preobj, resolution,:)
+    actualresultsReshape = reshape(Results.actualobj, resolution,:)
+
+    #data = contour(x=d1range,y=d2range,z=resultsReshape',contours_coloring="heatmap")
+    #data2 = contour(x=d1range,y=d2range,z=actualresultsReshape',contours_coloring="heatmap")
+
+    #layout = Layout(xaxis_range=[-1/dMax[1],-1/dMin[1]], yaxis_range=[-1/dMax[2],-1/dMin[2]])
+    #plot(data)
+    #plot(data2)
+
+    surfaceplotfig = make_subplots(rows = 2, cols =1,specs = fill(Spec(kind="scene"),2,1) ,row_titles=["predicted output" ; "actual output"])
+    add_trace!(surfaceplotfig,surface(x=d1range,y=d2range,z=resultsReshape),row=1, col=1)
+    add_trace!(surfaceplotfig,surface(x=d1range,y=d2range,z=actualresultsReshape),row=2, col=1)
+    scatterplot = scatter(x=Results.preobj, y=Results.actualobj, mode="markers")
+    return Results, d1range,d2range,resultsReshape,actualresultsReshape,surfaceplotfig, scatterplot
 end
