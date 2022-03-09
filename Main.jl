@@ -771,3 +771,5 @@ function resultsplot(Results,resolution)
     display.([surfaceplotfigd,heatmapq,heatmapd,scatterobj])
     return surfaceplotfigd, heatmapq, heatmapd, scatterobj
 end
+
+#writedlm("test.csv", Iterators.flatten(([names(resultsOut)], eachrow(resultsOut))), ',')
