@@ -174,7 +174,7 @@ function qSolve(d,A,b,c)
 
     @constraint(myMethodModel, sCon[i=1:n],
         #sSum -s[i]<=q[i]*(1+dSum
-        -sum(s[j] for j in filter(filt -> filt!=i, 1:n)) <= q[i]*(1+sum(d[j] for j in 1:n))
+        sum(s[j] for j in filter(filt -> filt!=i, 1:n)) <= q[i]*(1+sum(d[j] for j in 1:n))
     )
 
     println(myMethodModel)
@@ -226,7 +226,7 @@ function qSolve2(d,A,b,c,solPercentile)
 
     @constraint(myMethodModel, sCon[i=1:n],
         #sSum -s[i]<=q[i]*(1+dSum
-        -sum(s[j] for j in filter(filt -> filt!=i, 1:n)) <= q[i]*(1+sum(d[j] for j in 1:n))
+        sum(s[j] for j in filter(filt -> filt!=i, 1:n)) <= q[i]*(1+sum(d[j] for j in 1:n))
     )
 
     #println(myMethodModel)
@@ -275,7 +275,7 @@ function qSolveMIP(d,A,G,b,c,h, ystart)
 
     @constraint(myMethodModel, sCon[i=1:n],
         #sSum -s[i]<=q[i]*(1+dSum
-        -sum(s[j] for j in filter(filt -> filt!=i, 1:n)) <= q[i]*(1+sum(d[j] for j in 1:n))
+        sum(s[j] for j in filter(filt -> filt!=i, 1:n)) <= q[i]*(1+sum(d[j] for j in 1:n))
     )
 
     println(myMethodModel)
@@ -349,7 +349,7 @@ function NLsolveVersion4(A,b,c,dMin,dMax)
     )
 
     @NLconstraint(myMethodModel, OrderCon2[i=1:n],
-        -sum(s[j] for j in filter(filt -> filt!=i, 1:n)) <= q[i]*(1+sum(d[j] for j in 1:n))
+        sum(s[j] for j in filter(filt -> filt!=i, 1:n)) <= q[i]*(1+sum(d[j] for j in 1:n))
     )
 
     @NLconstraint(myMethodModel, dConMin[i=1:n],
@@ -429,7 +429,7 @@ function NLsolveMIP(A,G,b,c,h,dMin,dMax, ystart)
     )
 
     @NLconstraint(myMethodModel, OrderCon2[i=1:n],
-        -sum(s[j] for j in filter(filt -> filt!=i, 1:n)) <= q[i]*(1+sum(d[j] for j in 1:n))
+        sum(s[j] for j in filter(filt -> filt!=i, 1:n)) <= q[i]*(1+sum(d[j] for j in 1:n))
     )
 
     @NLconstraint(myMethodModel, dConMin[i=1:n],
@@ -713,9 +713,11 @@ function plot2Dexample(AOrig,bOrig,cOrig,tol,resolution,solPercentile)
         end
     end
 
-    d1range = float.(collect(range(-1/dMax[1],-1/dMin[1], length =resolution)))
-    d2range = float.(collect(range(-1/dMax[2],-1/dMin[2], length =resolution)))
+    #d1range = float.(collect(range(-1/dMax[1],-1/dMin[1], length =resolution)))
+    #d2range = float.(collect(range(-1/dMax[2],-1/dMin[2], length =resolution)))
 
+
+    #q1range = collect(range(extrema(), length =resolution))
     #d1results = Results.d1
     #d2results = Results.d2
     #preobjresults = Results.preobj
@@ -725,8 +727,8 @@ function plot2Dexample(AOrig,bOrig,cOrig,tol,resolution,solPercentile)
     #preobjresultsfilt = preobjresults[isnan.(preobjresults).==false]
 
     #this is the wrong way round for normal things but plotting is weird
-    resultsReshape = reshape(Results.preobj, resolution,:)
-    actualresultsReshape = reshape(Results.actualobj, resolution,:)
+    #resultsReshape = reshape(Results.preobj, resolution,:)'
+    #actualresultsReshape = reshape(Results.actualobj, resolution,:)'
 
     #data = contour(x=d1range,y=d2range,z=resultsReshape',contours_coloring="heatmap")
     #data2 = contour(x=d1range,y=d2range,z=actualresultsReshape',contours_coloring="heatmap")
@@ -735,9 +737,37 @@ function plot2Dexample(AOrig,bOrig,cOrig,tol,resolution,solPercentile)
     #plot(data)
     #plot(data2)
 
-    surfaceplotfig = make_subplots(rows = 2, cols =1,specs = fill(Spec(kind="scene"),2,1) ,row_titles=["predicted output" ; "actual output"])
-    add_trace!(surfaceplotfig,surface(x=d1range,y=d2range,z=resultsReshape),row=1, col=1)
-    add_trace!(surfaceplotfig,surface(x=d1range,y=d2range,z=actualresultsReshape),row=2, col=1)
-    scatterplot = scatter(x=Results.preobj, y=Results.actualobj, mode="markers")
-    return Results, d1range,d2range,resultsReshape,actualresultsReshape,surfaceplotfig, scatterplot
+    #surfaceplotfigd = make_subplots(rows = 2, cols =1,specs = fill(Spec(kind="scene"),2,1) ,row_titles=["predicted output" ; "actual output"])
+    #add_trace!(surfaceplotfigd,surface(x=d1range,y=d2range,z=resultsReshape),row=1, col=1)
+    #add_trace!(surfaceplotfigd,surface(x=d1range,y=d2range,z=actualresultsReshape),row=2, col=1)
+
+    #scatterplot = scatter(x=Results.preobj, y=Results.actualobj, mode="markers")
+    return Results
+end
+
+function resultsplot(Results,resolution)
+
+
+    d1range = float.(collect(range(extrema(Results.d1)..., length =resolution)))
+    d2range = float.(collect(range(extrema(Results.d2)..., length =resolution)))
+
+    resultsReshape = reshape(Results.preobj, resolution,:)'
+    actualresultsReshape = reshape(Results.actualobj, resolution,:)'
+
+    surfaceplotfigd = make_subplots(rows = 2, cols =1,specs = fill(Spec(kind="scene"),2,1) ,row_titles=["predicted output" ; "actual output"])
+    add_trace!(surfaceplotfigd,surface(x=d1range,y=d2range,z=resultsReshape),row=1, col=1)
+    add_trace!(surfaceplotfigd,surface(x=d1range,y=d2range,z=actualresultsReshape),row=2, col=1)
+
+    heatmapq = make_subplots(rows = 2, cols =1,specs = fill(Spec(kind="xy"),2,1) ,row_titles=["predicted output" ; "actual output"])
+    add_trace!(heatmapq,heatmap(x = vec(Results.q1), y = vec(Results.q2), z= vec(Results.preobj)),row=1, col=1)
+    add_trace!(heatmapq,heatmap(x = vec(Results.q1), y = vec(Results.q2), z= vec(Results.actualobj)),row=2, col=1)
+
+    heatmapd = make_subplots(rows = 2, cols =1,specs = fill(Spec(kind="xy"),2,1) ,row_titles=["predicted output" ; "actual output"])
+    add_trace!(heatmapd,heatmap(x = vec(Results.d1), y = vec(Results.d2), z= vec(Results.preobj)),row=1, col=1)
+    add_trace!(heatmapd,heatmap(x = vec(Results.d1), y = vec(Results.d2), z= vec(Results.actualobj)),row=2, col=1)
+
+    scatterobj = plot(scatter(x=Results.preobj, y=Results.actualobj, mode="markers"))
+
+    display.([surfaceplotfigd,heatmapq,heatmapd,scatterobj])
+    return surfaceplotfigd, heatmapq, heatmapd, scatterobj
 end
