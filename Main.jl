@@ -79,11 +79,13 @@ function findOrientation(A,b,c)
 
     @variable(orientationModel, u[1:m], Bin)
 
-    fix(u[1], 1; force = true)
+    #fix(u[1], 1; force = true)
 
     v = u.-1/2
 
-    @objective(orientationModel, Max, c' * x)
+    #@objective(orientationModel, Max, c' * x)
+
+    @objective(orientationModel, Max, c' * (x+v/2))
 
     @constraint(orientationModel, mainConstraint1,
         A * (x+v/2) .<= b-sum(abs.(A), dims=2)/4
@@ -686,7 +688,11 @@ end
 function plot2Dexample(AOrig,bOrig,cOrig,tol,resolution,solPercentile)
 
     A,b,c,dMin,dMax,btight,orientation = presolve(AOrig,bOrig,cOrig,tol)
-    all([sign.(dMin).==-1 ; sign.(dMax).==1]) || throw("lack of bounds on d")
+    #all([sign.(dMin).==-1 ; sign.(dMax).==1]) || throw("lack of bounds on d")
+
+    dMin[sign.(dMin).==1] .= -0.2
+    dMin[sign.(dMax).==-1] .= 0.2
+
     Results = DataFrames.DataFrame(
     d1 = Float64[],
     d2 = Float64[],
