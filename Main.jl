@@ -1,4 +1,4 @@
-using JuMP, CPLEX, LinearAlgebra, NLopt, DataFrames, PlotlyJS
+using JuMP, CPLEX, LinearAlgebra, NLopt, DataFrames, PlotlyJS, NaNMath, GLM
 
 
 #test cases
@@ -83,9 +83,9 @@ function findOrientation(A,b,c)
 
     v = u.-1/2
 
-    #@objective(orientationModel, Max, c' * x)
+    @objective(orientationModel, Max, c' * x)
 
-    @objective(orientationModel, Max, c' * (x+v/2))
+    #@objective(orientationModel, Max, c' * (x+v/2))
 
     @constraint(orientationModel, mainConstraint1,
         A * (x+v/2) .<= b-sum(abs.(A), dims=2)/4
@@ -605,6 +605,52 @@ function IntSolveMIP(x,y,q,d,A,G,b,c,h)
     return objective_value(IntModel), value.(gamma), value.(theta)
 end
 
+
+
+function IntSolveMIP2(x,y,q,d,A,G,b,c,h)
+    n=length(x)
+    n2 = length(y)
+    IntModel = Model(CPLEX.Optimizer)
+
+    set_silent(IntModel)
+    @variable(IntModel, gamma[1:n], Int)
+
+    @variable(IntModel, theta[i=1:n2], start = y[i])
+
+    @variable(IntModel, -1/2 <= s[1:n] <= 1/2)
+
+    @objective(IntModel, Max, c' * gamma + h' * theta)
+
+    x2= gamma - x
+
+    transmat = reduce(vcat,fill(d .* q,n)')+diagm(q)
+
+    #@constraint(IntModel, mainConstraint1[i=1:n],
+    #    x2[i]+sum(d[j]*(x2[i]-x2[j]) for j in 1:n) <= q[i]*(1+sum(d))/2
+    #)
+
+    @constraint(IntModel, mainConstraint,
+        x2.==transmat * s
+    )
+
+
+    #@constraint(IntModel, mainConstraint2[i=1:n],
+    #    x2[i]+sum(d[j]*(x2[i]-x2[j]) for j in 1:n) >= -q[i]*(1+sum(d))/2
+    #)
+
+    @constraint(IntModel, originalConstraints,
+        A*gamma + G*theta .<=b
+    )
+
+
+    println(IntModel)
+    JuMP.optimize!(IntModel)
+    println(termination_status(IntModel))
+    return objective_value(IntModel), value.(gamma), value.(theta)
+end
+
+
+
 function presolve(AOrig,bOrig,cOrig,tol)
     A = rationalize.(float.(AOrig))
     b = rationalize.(float.(bOrig))
@@ -711,7 +757,7 @@ function plot2Dexample(AOrig,bOrig,cOrig,tol,resolution,solPercentile)
 
             preobj,x,q = qSolve2([i,j],A,b,c,solPercentile)
             if isnan(preobj) == false
-                trueobj, truex = IntSolve2(x,q,[i,j],A,btight,c)
+                trueobj, truex = IntSolve(x,q,[i,j],A,btight,c)
                 push!(Results, (float(i),float(j), q[1],q[2], preobj, trueobj))
             else
                 push!(Results,(float(i),float(j), NaN, NaN, NaN, NaN))
@@ -757,20 +803,39 @@ function resultsplot(Results,resolution)
     d1range = float.(collect(range(extrema(Results.d1)..., length =resolution)))
     d2range = float.(collect(range(extrema(Results.d2)..., length =resolution)))
 
-    resultsReshape = reshape(Results.preobj, resolution,:)'
-    actualresultsReshape = reshape(Results.actualobj, resolution,:)'
+    predResults = Results.preobj
+    actualResults = Results.actualobj
+
+    #rescaling results
+    #predResultsMin, predResultsMax = NaNMath.extrema(predResults)
+    #actualResultsMin, actualResultsMax = NaNMath.extrema(actualResults)
+
+    #predResults = (predResults .- predResultsMin) ./ (predResultsMax - predResultsMin)
+    #actualResults = (actualResults .- actualResultsMin) ./ (actualResultsMax - actualResultsMin)
+
+    predResultsReshape = reshape(predResults, resolution,:)'
+    actualResultsReshape = reshape(actualResults, resolution,:)'
+
+    #resultsReshape = reshape(Results.preobj, resolution,:)'
+    #actualresultsReshape = reshape(Results.actualobj, resolution,:)'
+
+    #resultsMin, resultsMax = NaNMath.extrema(resultsReshape)
+    #actualresultsMin, actualresultsMax = NaNMath.extrema(actualresultsReshape)
+
+    #resultsReshape = (resultsReshape .- resultsMin) ./ (resultsMax-resultsMin)
+    #actualresultsReshape = (actualresultsReshape .- actualresultsMin) ./ (actualresultsMax-actualresultsMin)
 
     surfaceplotfigd = make_subplots(rows = 2, cols =1,specs = fill(Spec(kind="scene"),2,1) ,row_titles=["predicted output" ; "actual output"])
-    add_trace!(surfaceplotfigd,surface(x=d1range,y=d2range,z=resultsReshape),row=1, col=1)
-    add_trace!(surfaceplotfigd,surface(x=d1range,y=d2range,z=actualresultsReshape),row=2, col=1)
+    add_trace!(surfaceplotfigd,surface(x=d1range,y=d2range,z=predResultsReshape),row=1, col=1)
+    add_trace!(surfaceplotfigd,surface(x=d1range,y=d2range,z=actualResultsReshape),row=2, col=1)
 
     heatmapq = make_subplots(rows = 2, cols =1,specs = fill(Spec(kind="xy"),2,1) ,row_titles=["predicted output" ; "actual output"])
-    add_trace!(heatmapq,heatmap(x = vec(Results.q1), y = vec(Results.q2), z= vec(Results.preobj)),row=1, col=1)
-    add_trace!(heatmapq,heatmap(x = vec(Results.q1), y = vec(Results.q2), z= vec(Results.actualobj)),row=2, col=1)
+    add_trace!(heatmapq,heatmap(x = vec(Results.q1), y = vec(Results.q2), z= vec(predResults)),row=1, col=1)
+    add_trace!(heatmapq,heatmap(x = vec(Results.q1), y = vec(Results.q2), z= vec(actualResults)),row=2, col=1)
 
     heatmapd = make_subplots(rows = 2, cols =1,specs = fill(Spec(kind="xy"),2,1) ,row_titles=["predicted output" ; "actual output"])
-    add_trace!(heatmapd,heatmap(x = vec(Results.d1), y = vec(Results.d2), z= vec(Results.preobj)),row=1, col=1)
-    add_trace!(heatmapd,heatmap(x = vec(Results.d1), y = vec(Results.d2), z= vec(Results.actualobj)),row=2, col=1)
+    add_trace!(heatmapd,heatmap(x = vec(Results.d1), y = vec(Results.d2), z= vec(predResults)),row=1, col=1)
+    add_trace!(heatmapd,heatmap(x = vec(Results.d1), y = vec(Results.d2), z= vec(actualResults)),row=2, col=1)
 
     scatterobj = plot(scatter(x=Results.preobj, y=Results.actualobj, mode="markers"))
 
