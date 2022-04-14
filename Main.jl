@@ -1,6 +1,6 @@
-using JuMP, CPLEX, LinearAlgebra, NLopt, DataFrames, PlotlyJS, NaNMath, GLM
-
-
+#using JuMP, CPLEX, LinearAlgebra, NLopt, DataFrames, PlotlyJS, NaNMath, GLM, LinRegOutliers
+using JuMP, CPLEX, LinearAlgebra, NLopt, DataFrames, PlotlyJS
+#, NaNMath, GLM, LinRegOutliers
 #test cases
 include("test_cases.jl")
 
@@ -54,6 +54,18 @@ function relaxMIP(A::AbstractMatrix{<:Rational{Int64}},G,b::AbstractVector{<:Rat
     return A,G,b
 end
 
+function transformationMatrixBounds(A::AbstractMatrix)
+    rowsum = sum(A,dims=2)
+    Areciprical = 1 ./ A
+    umin= zeros(Rational,size(A,2))
+    umax= zeros(Rational,size(A,2))
+
+    for (index, col) in enumerate(eachcol(A))
+        umin[index] = minimum(rowsum[col.!=0] ./ col[col.!=0])
+        umax[index] = maximum(rowsum[col.!=0] ./ col[col.!=0])
+    end
+    return umin,umax
+end
 
 function transformationMatrixBoundsWithC(A::AbstractMatrix, c::AbstractVector)
     A= [A; c']
@@ -101,8 +113,11 @@ function findOrientation(A,b,c)
     JuMP.optimize!(orientationModel)
 
     #redirect_stdout(TT)
-
-    return value.(x), (2*round.(Int,value.(u)) .-1)
+    if termination_status(orientationModel) == OPTIMAL
+        return value.(x), (2*round.(Int,value.(u)) .-1)
+    else
+        throw("Orientation can't be found")
+    end
 end
 
 
@@ -134,8 +149,12 @@ function findOrientationMIP(A,G,b,c,h)
     )
 
     JuMP.optimize!(orientationModel)
+    if termination_status(orientationModel) == OPTIMAL
+        value.(x), value.(y), (2*round.(Int,value.(u)) .-1)
+    else
+        throw("Orientation can't be found")
+    end
 
-    return value.(x), value.(y), (2*round.(Int,value.(u)) .-1)
 end
 
 function qSolve(d,A,b,c)
@@ -263,7 +282,7 @@ function qSolveMIP(d,A,G,b,c,h, ystart)
 
     @objective(myMethodModel, Max,
         #c' * (x + 1/2 .* transmat*sign.(c)) + h' * y
-        c'*x+h' * y
+        c'*x+ h' * y
     )
 
     @constraint(myMethodModel, MainCon[i=1:m],
@@ -280,11 +299,14 @@ function qSolveMIP(d,A,G,b,c,h, ystart)
         sum(s[j] for j in filter(filt -> filt!=i, 1:n)) <= q[i]*(1+sum(d[j] for j in 1:n))
     )
 
-    println(myMethodModel)
+    #println(myMethodModel)
     JuMP.optimize!(myMethodModel)
-    println(termination_status(myMethodModel))
-
-    return objective_value(myMethodModel), value.(x), value.(y), value.(q)
+    #println(termination_status(myMethodModel))
+    if termination_status(myMethodModel) == OPTIMAL
+        return objective_value(myMethodModel), value.(x), value.(y), value.(q)
+    else
+        return NaN,NaN,NaN,NaN
+    end
 end
 
 
@@ -293,8 +315,10 @@ function NLsolveVersion4(A,b,c,dMin,dMax)
     m,n = size(A)
     myMethodModel = Model(NLopt.Optimizer)
 
-    set_optimizer_attribute(myMethodModel, "algorithm", :LD_MMA)
+    #set_optimizer_attribute(myMethodModel, "algorithm", :LD_MMA)
+    set_optimizer_attribute(myMethodModel, "algorithm", :LN_COBYLA)
 
+    set_time_limit_sec(myMethodModel, 600)
     #set_optimizer_attribute(myMethodModel, "xtol_rel", 0.1)
     @variable(myMethodModel, x[1:n])
 
@@ -305,7 +329,6 @@ function NLsolveVersion4(A,b,c,dMin,dMax)
     @variable(myMethodModel, r[1:n] >=0, start = 0)
 
     @variable(myMethodModel, s[1:n] >=0, start = 0)
-
 
 
     #@variable(myMethodModel, u[1:n])
@@ -380,6 +403,8 @@ function NLsolveVersion4(A,b,c,dMin,dMax)
     #)
     println(myMethodModel)
     JuMP.optimize!(myMethodModel)
+
+    println(raw_status(myMethodModel))
     println(termination_status(myMethodModel))
 
 
@@ -391,7 +416,8 @@ function NLsolveMIP(A,G,b,c,h,dMin,dMax, ystart)
     m2,n2 = size(G)
     myMethodModel = Model(NLopt.Optimizer)
 
-    set_optimizer_attribute(myMethodModel, "algorithm", :LD_MMA)
+    #set_optimizer_attribute(myMethodModel, "algorithm", :LD_MMA)
+    set_optimizer_attribute(myMethodModel, "algorithm", :LN_COBYLA)
 
     @variable(myMethodModel, x[1:n])
 
@@ -515,8 +541,12 @@ function IntSolve(x,q,d,A,b,c)
     #println(termination_status(IntModel))
 
     #println(primal_feasibility_report(IntModel, Dict(gamma .=> [2.0,0.0,0.0,1.0]) ))
+    if termination_status(IntModel) == OPTIMAL
+        return objective_value(IntModel), value.(gamma)
+    else
+        return NaN,NaN
+    end
 
-    return objective_value(IntModel), value.(gamma)
 end
 
 
@@ -566,8 +596,12 @@ function IntSolve2(x,q,d,A,b,c)
     #println(termination_status(IntModel))
 
     #println(primal_feasibility_report(IntModel, Dict(gamma .=> [2.0,0.0,0.0,1.0]) ))
+    if termination_status(IntModel) == OPTIMAL
+        return objective_value(IntModel), value.(gamma)
+    else
+        return NaN,NaN
+    end
 
-    return objective_value(IntModel), value.(gamma)
 end
 
 
@@ -599,10 +633,15 @@ function IntSolveMIP(x,y,q,d,A,G,b,c,h)
     )
 
 
-    println(IntModel)
+    #println(IntModel)
     JuMP.optimize!(IntModel)
-    println(termination_status(IntModel))
-    return objective_value(IntModel), value.(gamma), value.(theta)
+    #println(termination_status(IntModel))
+
+    if termination_status(IntModel) == OPTIMAL
+        return objective_value(IntModel), value.(gamma), value.(theta)
+    else
+        return NaN,NaN, NaN
+    end
 end
 
 
@@ -646,17 +685,24 @@ function IntSolveMIP2(x,y,q,d,A,G,b,c,h)
     println(IntModel)
     JuMP.optimize!(IntModel)
     println(termination_status(IntModel))
-    return objective_value(IntModel), value.(gamma), value.(theta)
+    if termination_status(IntModel) == OPTIMAL
+        return objective_value(IntModel), value.(gamma), value.(theta)
+    else
+        return NaN,NaN, NaN
+    end
 end
 
 
 
-function presolve(AOrig,bOrig,cOrig,tol)
+function presolve(AOrig,bOrig,cOrig,tol::Rational{Int64})
+    if tol == 0
+        throw("tolerance/δ can't be 0")
+    end
     A = rationalize.(float.(AOrig))
     b = rationalize.(float.(bOrig))
     c = rationalize.(float.(cOrig))
     A,btight = relax(A,b)
-    b = floor.(btight) .+ (1//1 - rationalize(tol))
+    b = floor.(btight) .+ (1//1 - tol)
     flotSol, orientation = findOrientation(A,b,c)
     A = A.*orientation'
     c = c.*orientation
@@ -665,13 +711,33 @@ function presolve(AOrig,bOrig,cOrig,tol)
     return A,b,c,dMin,dMax,btight,orientation
 end
 
-function presolveMIP(AOrig,GOrig,bOrig,cOrig,h,tol)
+function presolveCentroid(AOrig,bOrig,cOrig,tol::Rational{Int64})
+    if tol == 0
+        throw("tolerance/δ can't be 0")
+    end
+    A = rationalize.(float.(AOrig))
+    b = rationalize.(float.(bOrig))
+    c = rationalize.(float.(cOrig))
+    A,btight = relax(A,b)
+    b = floor.(btight) .+ (1//1 - tol)
+    flotSol, orientation = findOrientation(A,b,c)
+    A = A.*orientation'
+    c = c.*orientation
+    dMin,dMax = transformationMatrixBounds(A)
+
+    return A,b,c,dMin,dMax,btight,orientation
+end
+
+function presolveMIP(AOrig,GOrig,bOrig,cOrig,h,tol::Rational{Int64})
+    if tol == 0
+        throw("tolerance/δ can't be 0")
+    end
     A = rationalize.(float.(AOrig))
     b = rationalize.(float.(bOrig))
     G = rationalize.(float.(GOrig))
     c = rationalize.(float.(cOrig))
     A,G,btight = relaxMIP(A,G,b)
-    b = floor.(btight) .+ (1//1 - rationalize(tol))
+    b = floor.(btight) .+ (1//1 - tol)
     flotSol,yStart, orientation = findOrientationMIP(A,G,b,c,h)
     A = A.*orientation'
     c = c.*orientation
@@ -680,30 +746,68 @@ function presolveMIP(AOrig,GOrig,bOrig,cOrig,h,tol)
     return A,G,b,c,dMin,dMax,yStart,btight,orientation
 end
 
-function testing2(AOrig,bOrig,cOrig,tol)
-    A,b,c,dMin,dMax,btight,orientation = presolve(AOrig,bOrig,cOrig,tol)
+
+function presolveMIPCentroid(AOrig,GOrig,bOrig,cOrig,h,tol::Rational{Int64})
+    if tol == 0
+        throw("tolerance/δ can't be 0")
+    end
+    A = rationalize.(float.(AOrig))
+    b = rationalize.(float.(bOrig))
+    G = rationalize.(float.(GOrig))
+    c = rationalize.(float.(cOrig))
+    A,G,btight = relaxMIP(A,G,b)
+    b = floor.(btight) .+ (1//1 - tol)
+    flotSol,yStart, orientation = findOrientationMIP(A,G,b,c,h)
+    A = A.*orientation'
+    c = c.*orientation
+    dMin,dMax = transformationMatrixBounds(A)
+
+    return A,G,b,c,dMin,dMax,yStart,btight,orientation
+end
+
+
+function testing2(AOrig,bOrig,cOrig,tol::Rational{Int64})
+    A,b,c,dMin,dMax,btight,orientation = presolveCentroid(AOrig,bOrig,cOrig,tol)
 
     obj, x, q, d = NLsolveVersion4(A,b,c,dMin,dMax)
 
+
     obj2,x2,q2 = qSolve(d,A,b,c)
+
+    if isnan(obj2) == true
+        throw("valid q can not be found with given d")
+    end
     #trueobj, truex = IntSolve(x2,q2,d,A,bOrig,c)
 
     #slack variable version - may be more temperamental
+
     trueobj, truex = IntSolve2(x2,q2,d,A,btight,c)
 
+    if isnan(trueobj) == true
+        throw("can not find solution within given GIR")
+    end
     truex = truex.*orientation
     return q2, d, trueobj, truex, all(AOrig*truex .<= bOrig)
 end
 
-function testingMIP(AOrig,GOrig,bOrig,cOrig,h,tol)
+function testingMIP(AOrig,GOrig,bOrig,cOrig,h,tol::Rational{Int64})
 
-    A,G,b,c,dMin,dMax,yStart,btight,orientation = presolveMIP(AOrig,GOrig,bOrig,cOrig,h,tol)
+    A,G,b,c,dMin,dMax,yStart,btight,orientation = presolveMIPCentroid(AOrig,GOrig,bOrig,cOrig,h,tol)
 
 
     obj, x, y, q, d = NLsolveMIP(A,G,b,c,h,dMin,dMax, yStart)
 
     obj2,x2,y2,q2 = qSolveMIP(d,A,G,b,c,h, y)
+
+    if isnan(obj2) == true
+        throw("valid q can not be found with given d")
+    end
+
     trueobj, truex, truey = IntSolveMIP(x2,y2,q2,d,A,G,btight,c,h)
+
+    if isnan(trueobj) == true
+        throw("can not find solution within given GIR")
+    end
 
     truex = truex.*orientation
     return q2, d, trueobj, truex,truey, all(AOrig*truex+G*truey .<= bOrig)
@@ -731,13 +835,19 @@ function SolveINT(A,b,c)
     return objective_value(IntModel), value.(x)
 end
 
-function plot2Dexample(AOrig,bOrig,cOrig,tol,resolution,solPercentile)
+function plot2Dexample(AOrig,bOrig,cOrig,tol::Rational{Int64},resolution,solPercentile)
 
-    A,b,c,dMin,dMax,btight,orientation = presolve(AOrig,bOrig,cOrig,tol)
+    if solPercentile ==0
+        A,b,c,dMin,dMax,btight,orientation = presolveCentroid(AOrig,bOrig,cOrig,tol)
+    else
+        A,b,c,dMin,dMax,btight,orientation = presolve(AOrig,bOrig,cOrig,tol)
+    end
+
+
     #all([sign.(dMin).==-1 ; sign.(dMax).==1]) || throw("lack of bounds on d")
 
     dMin[sign.(dMin).==1] .= -0.2
-    dMin[sign.(dMax).==-1] .= 0.2
+    dMax[sign.(dMax).==-1] .= 0.2
 
     Results = DataFrames.DataFrame(
     d1 = Float64[],
@@ -757,7 +867,7 @@ function plot2Dexample(AOrig,bOrig,cOrig,tol,resolution,solPercentile)
 
             preobj,x,q = qSolve2([i,j],A,b,c,solPercentile)
             if isnan(preobj) == false
-                trueobj, truex = IntSolve(x,q,[i,j],A,btight,c)
+                trueobj, truex = IntSolve2(x,q,[i,j],A,btight,c)
                 push!(Results, (float(i),float(j), q[1],q[2], preobj, trueobj))
             else
                 push!(Results,(float(i),float(j), NaN, NaN, NaN, NaN))
@@ -765,39 +875,10 @@ function plot2Dexample(AOrig,bOrig,cOrig,tol,resolution,solPercentile)
         end
     end
 
-    #d1range = float.(collect(range(-1/dMax[1],-1/dMin[1], length =resolution)))
-    #d2range = float.(collect(range(-1/dMax[2],-1/dMin[2], length =resolution)))
-
-
-    #q1range = collect(range(extrema(), length =resolution))
-    #d1results = Results.d1
-    #d2results = Results.d2
-    #preobjresults = Results.preobj
-
-    #d1resultsfilt = d1results[isnan.(preobjresults).==false]
-    #d2resultsfilt = d2results[isnan.(preobjresults).==false]
-    #preobjresultsfilt = preobjresults[isnan.(preobjresults).==false]
-
-    #this is the wrong way round for normal things but plotting is weird
-    #resultsReshape = reshape(Results.preobj, resolution,:)'
-    #actualresultsReshape = reshape(Results.actualobj, resolution,:)'
-
-    #data = contour(x=d1range,y=d2range,z=resultsReshape',contours_coloring="heatmap")
-    #data2 = contour(x=d1range,y=d2range,z=actualresultsReshape',contours_coloring="heatmap")
-
-    #layout = Layout(xaxis_range=[-1/dMax[1],-1/dMin[1]], yaxis_range=[-1/dMax[2],-1/dMin[2]])
-    #plot(data)
-    #plot(data2)
-
-    #surfaceplotfigd = make_subplots(rows = 2, cols =1,specs = fill(Spec(kind="scene"),2,1) ,row_titles=["predicted output" ; "actual output"])
-    #add_trace!(surfaceplotfigd,surface(x=d1range,y=d2range,z=resultsReshape),row=1, col=1)
-    #add_trace!(surfaceplotfigd,surface(x=d1range,y=d2range,z=actualresultsReshape),row=2, col=1)
-
-    #scatterplot = scatter(x=Results.preobj, y=Results.actualobj, mode="markers")
     return Results
 end
 
-function resultsplot(Results,resolution)
+function resultsplot(Results,resolution,optimalValue,titleText,RatioCutoff)
 
 
     d1range = float.(collect(range(extrema(Results.d1)..., length =resolution)))
@@ -806,41 +887,215 @@ function resultsplot(Results,resolution)
     predResults = Results.preobj
     actualResults = Results.actualobj
 
-    #rescaling results
-    #predResultsMin, predResultsMax = NaNMath.extrema(predResults)
-    #actualResultsMin, actualResultsMax = NaNMath.extrema(actualResults)
+    maxGIRValue = maximum(predResults[.!isnan.(predResults)])
 
-    #predResults = (predResults .- predResultsMin) ./ (predResultsMax - predResultsMin)
-    #actualResults = (actualResults .- actualResultsMin) ./ (actualResultsMax - actualResultsMin)
+    predResults = abs.(1 .- predResults / maxGIRValue)
+    actualResults = abs.(1 .- actualResults / optimalValue)
+
 
     predResultsReshape = reshape(predResults, resolution,:)'
     actualResultsReshape = reshape(actualResults, resolution,:)'
 
-    #resultsReshape = reshape(Results.preobj, resolution,:)'
-    #actualresultsReshape = reshape(Results.actualobj, resolution,:)'
+    predResultshigh = maximum(predResults[.!isnan.(predResults)])
+    actualResultshigh = maximum(actualResults[.!isnan.(actualResults)])
 
-    #resultsMin, resultsMax = NaNMath.extrema(resultsReshape)
-    #actualresultsMin, actualresultsMax = NaNMath.extrema(actualresultsReshape)
 
-    #resultsReshape = (resultsReshape .- resultsMin) ./ (resultsMax-resultsMin)
-    #actualresultsReshape = (actualresultsReshape .- actualresultsMin) ./ (actualresultsMax-actualresultsMin)
+    surfaceplotpred = plot(surface(x=d1range,
+    y=d2range,
+    z=predResultsReshape,
+    cmin = 0,
+    cmax = RatioCutoff,
+    #reversescale=true,
+    colorscale = "YIOrRd"
+    ),
+        Layout(
+            title = attr(
+                text = titleText,
+                x = 0.5
+            ),
+            scene = attr(
+                xaxis_title = "d1",
+                yaxis_title = "d2",
+                zaxis_title = "GIR Gap Ratioe",
+                zaxis = attr(
+                    range = [predResultshigh, 0]
+                )
+            )
+        )
+    )
 
-    surfaceplotfigd = make_subplots(rows = 2, cols =1,specs = fill(Spec(kind="scene"),2,1) ,row_titles=["predicted output" ; "actual output"])
-    add_trace!(surfaceplotfigd,surface(x=d1range,y=d2range,z=predResultsReshape),row=1, col=1)
-    add_trace!(surfaceplotfigd,surface(x=d1range,y=d2range,z=actualResultsReshape),row=2, col=1)
+    surfaceplotactual = plot(surface(x=d1range,
+    y=d2range,
+    z=actualResultsReshape,
+    cmin = 0,
+    cmax = RatioCutoff,
+    #reversescale=true,
+    colorscale = "YIOrRd"
+    ),
+        Layout(
+            title = attr(
+                text = titleText,
+                x = 0.5
+            ),
+            scene = attr(
+                xaxis_title = "d1",
+                yaxis_title = "d2",
+                zaxis_title = "Optimality Gap Ratio",
+                zaxis = attr(
+                    range = [actualResultshigh, 0]
+                )
+            )
+        )
+    )
 
-    heatmapq = make_subplots(rows = 2, cols =1,specs = fill(Spec(kind="xy"),2,1) ,row_titles=["predicted output" ; "actual output"])
-    add_trace!(heatmapq,heatmap(x = vec(Results.q1), y = vec(Results.q2), z= vec(predResults)),row=1, col=1)
-    add_trace!(heatmapq,heatmap(x = vec(Results.q1), y = vec(Results.q2), z= vec(actualResults)),row=2, col=1)
+    #heatmapq = make_subplots(rows = 2, cols =1,specs = fill(Spec(kind="xy"),2,1) ,row_titles=["predicted output" ; "actual output"])
+    #add_trace!(heatmapq,heatmap(x = vec(Results.q1), y = vec(Results.q2), z= vec(predResults)),row=1, col=1)
+    #add_trace!(heatmapq,heatmap(x = vec(Results.q1), y = vec(Results.q2), z= vec(actualResults)),row=2, col=1)
 
-    heatmapd = make_subplots(rows = 2, cols =1,specs = fill(Spec(kind="xy"),2,1) ,row_titles=["predicted output" ; "actual output"])
-    add_trace!(heatmapd,heatmap(x = vec(Results.d1), y = vec(Results.d2), z= vec(predResults)),row=1, col=1)
-    add_trace!(heatmapd,heatmap(x = vec(Results.d1), y = vec(Results.d2), z= vec(actualResults)),row=2, col=1)
+    #heatmapd = make_subplots(rows = 2, cols =1,specs = fill(Spec(kind="xy"),2,1) ,row_titles=["predicted output" ; "actual output"])
+    #add_trace!(heatmapd,heatmap(x = vec(Results.d1), y = vec(Results.d2), z= vec(predResults)),row=1, col=1)
+    #add_trace!(heatmapd,heatmap(x = vec(Results.d1), y = vec(Results.d2), z= vec(actualResults)),row=2, col=1)
 
-    scatterobj = plot(scatter(x=Results.preobj, y=Results.actualobj, mode="markers"))
 
-    display.([surfaceplotfigd,heatmapq,heatmapd,scatterobj])
-    return surfaceplotfigd, heatmapq, heatmapd, scatterobj
+    #display.([surfaceplotpred,surfaceplotactual,heatmapq,heatmapd])
+    display.([surfaceplotpred,surfaceplotactual])
+    #return surfaceplotfigd, heatmapq, heatmapd, scatterobj
 end
+
+function RMcorrelation(AOrig,bOrig,cOrig,tol::Rational{Int64},num_tests,solPercentile)
+        if solPercentile ==0
+            A,b,c,dMin,dMax,btight,orientation = presolveCentroid(AOrig,bOrig,cOrig,tol)
+        else
+            A,b,c,dMin,dMax,btight,orientation = presolve(AOrig,bOrig,cOrig,tol)
+        end
+
+        #all([sign.(dMin).==-1 ; sign.(dMax).==1]) || throw("lack of bounds on d")
+
+        dMin[sign.(dMin).!=-1] .= -1//5
+        dMax[sign.(dMax).!=1] .= 1//5
+
+        Results = DataFrames.DataFrame(
+        preobj = Float64[],
+        actualobj = Float64[],
+        )
+
+        dSize = length(c)
+        global numSolution = 0
+
+        while numSolution < num_tests
+            d = (-1 ./ dMin .+ 1 ./ dMax) .* rand(dSize) .+ -1 ./ dMax
+            preobj,x,q = qSolve2(d,A,b,c,solPercentile)
+            if isnan(preobj) == false
+                global numSolution += 1
+                println(numSolution)
+                trueobj, truex = IntSolve2(x,q,d,A,btight,c)
+                push!(Results, (preobj, trueobj))
+            end
+        end
+
+        fracWrongSolve = sum(isnan.(Results.actualobj)) / num_tests
+
+        return Results, fracWrongSolve
+end
+
+
+function RMcorrelationMIP(AOrig,GOrig,bOrig,cOrig,h,tol::Rational{Int64},num_tests,solPercentile)
+        if solPercentile ==0
+            A,G,b,c,dMin,dMax,yStart,btight,orientation = presolveMIPCentroid(AOrig,GOrig,bOrig,cOrig,h,tol)
+        else
+            A,G,b,c,dMin,dMax,yStart,btight,orientation = presolveMIP(AOrig,GOrig,bOrig,cOrig,h,tol)
+        end
+
+        #all([sign.(dMin).==-1 ; sign.(dMax).==1]) || throw("lack of bounds on d")
+
+        dMin[sign.(dMin).!=-1] .= -1//5
+        dMax[sign.(dMax).!=1] .= 1//5
+
+        Results = DataFrames.DataFrame(
+        preobj = Float64[],
+        actualobj = Float64[],
+        )
+
+        dSize = length(c)
+        global numSolution = 0
+
+        while numSolution < num_tests
+            d = (-1 ./ dMin .+ 1 ./ dMax) .* rand(dSize) .+ -1 ./ dMax
+            preobj,x,y,q = qSolveMIP(d,A,G,b,c,h,yStart)
+            if isnan(preobj) == false
+                global numSolution += 1
+                println(numSolution)
+                trueobj, truex, truey = IntSolveMIP(x,y,q,d,A,G,btight,c,h)
+                push!(Results, (preobj, trueobj))
+            end
+        end
+
+        fracWrongSolve = sum(isnan.(Results.actualobj)) / num_tests
+
+        return Results, fracWrongSolve
+end
+
+#useless can delete
+function ErrorRateINT(data,tol,num_tests,num_repeats)
+    fracWrongSolve= zeros(length(tol))
+
+    #fracResults = DataFrames.DataFrame(map(x-> x= Float64[], tol), :auto)
+    fracResults = DataFrames.DataFrame(map(x-> x= Float64[], tol), "δ=" .* string.(float.(tol)))
+    for i = 1:num_repeats
+        for j = 1:length(tol)
+            Results, fracWrongSolve[j] = RMcorrelation(data...,tol[j],num_tests,0)
+        end
+        push!(fracResults, tuple(fracWrongSolve...))
+    end
+    return fracResults
+end
+
+
+
+function correlationScatter(Results,titleText,optimalValue,maxGIRRatio)
+    optimalityGap = abs.(1 .- Results.actualobj / optimalValue)
+    scaledGIR = abs.(1 .- Results.preobj / maximum(Results.preobj))
+
+    ValidGIRRatio = scaledGIR .<= maxGIRRatio
+    scaledGIR = scaledGIR[ValidGIRRatio]
+    optimalityGap = optimalityGap[ValidGIRRatio]
+
+    isOptimal = Results.actualobj[ValidGIRRatio] .== optimalValue
+
+
+    nonOptimal = scatter(
+    x=scaledGIR[.!isOptimal],
+    y=optimalityGap[.!isOptimal],
+    mode = "markers",
+    marker_color = "blue",
+    name = "Solutions"
+    )
+
+    Optimal = scatter(
+    x=scaledGIR[isOptimal],
+    y=optimalityGap[isOptimal],
+    mode = "markers",
+    marker_color = "red",
+    name = "Optimal Solutions"
+    )
+
+    scatterobj = plot([nonOptimal,Optimal],
+            Layout(
+                title = attr(
+                    text = titleText,
+                    x=0.5
+                    ),
+            xaxis_title = "GIR Gap Ratio",
+            yaxis_title = "Optimality Gap Ratio",
+            showlegend = false,
+            #xaxis_range = [0,maxGIRRatio]
+            )
+    )
+
+    display(scatterobj)
+end
+
+
+
 
 #writedlm("test.csv", Iterators.flatten(([names(resultsOut)], eachrow(resultsOut))), ',')
