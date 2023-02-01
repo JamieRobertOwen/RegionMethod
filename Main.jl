@@ -605,6 +605,61 @@ function IntSolve2(x,q,d,A,b,c)
 end
 
 
+function IntSolve2NoOrigConstraints(x,q,d,A,b,c)
+    n=length(x)
+    IntModel = Model(CPLEX.Optimizer)
+
+    set_silent(IntModel)
+    @variable(IntModel, gamma[1:n], Int)
+
+    @variable(IntModel, -1/2 <= s[1:n] <= 1/2)
+
+    @objective(IntModel, Max, c' * gamma)
+
+    transmat = reduce(vcat,fill(d .* q,n)')+diagm(q)
+
+    #v = d.*q
+    #u = ones(n)
+    #Ainv = diagm(1 ./q)
+
+    #mult = 1 + v'*Ainv*u
+
+    #lhs = Ainv-(Ainv*u*v'*Ainv)/mult
+
+
+    x2= gamma - x
+
+    #@constraint(IntModel, mainConstraint1[i=1:n],
+    #    x2[i]+sum(d[j]*(x2[i]-x2[j]) for j in 1:n) <= q[i]*(1+sum(d))/2
+    #)
+
+    @constraint(IntModel, mainConstraint,
+        x2.==transmat * s
+    )
+
+    #@constraint(IntModel, mainConstraint2[i=1:n],
+    #    x2[i]+sum(d[j]*(x2[i]-x2[j]) for j in 1:n) >= -q[i]*(1+sum(d))/2
+    #)
+
+    #@constraint(IntModel, originalConstraints,
+    #    A*gamma .<=b
+    #)
+
+
+    #println(IntModel)
+    JuMP.optimize!(IntModel)
+    #println(termination_status(IntModel))
+
+    #println(primal_feasibility_report(IntModel, Dict(gamma .=> [2.0,0.0,0.0,1.0]) ))
+    if termination_status(IntModel) == OPTIMAL
+        return objective_value(IntModel), value.(gamma)
+    else
+        return NaN,NaN
+    end
+
+end
+
+
 function IntSolveMIP(x,y,q,d,A,G,b,c,h)
     n=length(x)
     n2 = length(y)
@@ -987,9 +1042,14 @@ function RMcorrelation(AOrig,bOrig,cOrig,tol::Rational{Int64},num_tests,solPerce
             preobj,x,q = qSolve2(d,A,b,c,solPercentile)
             if isnan(preobj) == false
                 global numSolution += 1
-                println(numSolution)
                 trueobj, truex = IntSolve2(x,q,d,A,btight,c)
                 push!(Results, (preobj, trueobj))
+                if isnan(trueobj) == true
+                    println(d)
+                    trueobj, truex = IntSolve2NoOrigConstraints(x,q,d,A,btight,c)
+                    println(trueobj)
+                    println(truex)
+                end
             end
         end
 
